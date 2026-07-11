@@ -7,12 +7,19 @@
 
 ## Current state
 
-**M1 shipped-quality; M2 underway.** M2 linear-expression recognition is now built:
-`core::segment` (greedy left-to-right stroke→symbol grouping, cap 4, DESIGN §4.2) +
-`core::line::recognize_line` (segment → classify each → reading order), exposed as
-`ink2tex-desktop --recognize-expr`. Verified on a composed two-symbol ink: it
-segments into 2 ordered symbols and classifies each (grouping a 3-stroke symbol,
-isolating a 1-stroke one). Delayed strokes / the hypothesis lattice remain M3.
+**M3 (2-D structure) built — the recognizer now emits real math, not just a list of
+symbols.** `core::structure` turns positioned symbols into a Symbol Layout Tree via
+geometry + class rules — baseline + super/subscripts, fractions (nested,
+minus-disambiguated per §4.3), radicals (including over a fraction), and `\sum`/`\int`
+limits — and `core::latex` emits the string (with a Detexify `symbolId`→command
+mapper). `core::segment` now clusters strokes into symbols by **2-D proximity** (so a
+fraction's stacked bar/numerator/denominator stay separate for structure to
+reassemble; this replaced the M2 left-to-right split and serves both). The whole
+pipeline `core::recognize_expression` (ink → segment → classify → structure → LaTeX),
+exposed as `ink2tex-desktop --recognize-expr`, was verified end-to-end: a hand-drawn
+fraction layout parses to `\frac{}{}`. **17 structure tests.** Deferred: the learned
+relation MLP, robust segmentation of stacked-bar symbols (`=`/`≡`/`Ξ`), and an honest
+CROHME exact-match number (needs the full-data model + more segmentation work).
 
 **M1 recognizer works end-to-end on real data.** The full stack — Detexify strokes
 → rasterize → PyTorch train → int8 quantize → Rust int8 forward pass → labelled

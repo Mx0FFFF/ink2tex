@@ -170,12 +170,25 @@ fn main() -> Result<()> {
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("class {c}"))
         };
+        // The headline: the full 2-D structure → LaTeX (needs labels for √/bar/op tokens).
+        if let Some(l) = labels.as_ref() {
+            match ink2tex_core::recognize_expression(&ink, &weights, l, 3) {
+                Ok(latex) => println!("LaTeX: {latex}"),
+                Err(e) => eprintln!("structure error: {e}"),
+            }
+        } else {
+            eprintln!("(pass --labels for structured LaTeX)");
+        }
         let seq: Vec<String> = line
             .iter()
             .filter_map(|s| s.predictions.first())
             .map(|p| name(p.class))
             .collect();
-        println!("line: {} symbol(s) → {}", line.len(), seq.join("  ·  "));
+        println!(
+            "segmented: {} symbol(s) → {}",
+            line.len(),
+            seq.join("  ·  ")
+        );
         for (i, s) in line.iter().enumerate() {
             println!("  symbol {} (strokes {:?}):", i + 1, s.strokes);
             for p in &s.predictions {
