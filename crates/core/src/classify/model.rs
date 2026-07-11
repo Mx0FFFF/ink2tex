@@ -13,6 +13,8 @@
 //! `recognize` returns `Error::BadWeights` rather than indexing out of bounds.
 
 use super::kernel::{conv2d_i8, dense_i8, dequantize_i32, maxpool2d_i8, quantize_i8, requantize};
+use super::online::{ONLINE_POINTS, ONLINE_STRIDE};
+use super::weights::Tensor;
 use super::{rank_logits, Prediction, Weights};
 use crate::error::{Error, Result};
 
@@ -22,12 +24,16 @@ fn scalar(w: &Weights, name: &str) -> Result<f32> {
         .ok_or(Error::BadWeights("missing scale tensor"))
 }
 
-/// Run the M1 CNN. `bitmap` is `size*size` grayscale in `[0,1]` (from `rasterize`);
-/// `features` is the `global_features` vector. Returns the ranked top-`k`.
+/// Run the CNN. `bitmap` is `size*size` grayscale in `[0,1]` (from `rasterize`);
+/// `features` is the `global_features` vector; `online` is the `online_features`
+/// trajectory tensor (DESIGN §3b) — used only if the model carries an online branch
+/// (an `o1.w` tensor), otherwise ignored, so a bitmap-only model still runs with
+/// `online = &[]`. Returns the ranked top-`k`.
 pub fn recognize(
     w: &Weights,
     bitmap: &[f32],
     features: &[f32],
+    online: &[f32],
     size: usize,
     k: usize,
 ) -> Result<Vec<Prediction>> {
@@ -101,8 +107,13 @@ pub fn recognize(
     let a = requantize(&acc, s_c2 * c2.scale / s_f1, true);
     let (a, _h, _w) = maxpool2d_i8(&a, oc2, h, wd, 2, 2);
 
-    // flatten (already CHW-flat) + global features, quantized at the fc1 input scale
+    // flatten (already CHW-flat), then the optional online-channel branch, then the
+    // global features — all int8 at the shared fc1 input scale s_f1, in this exact
+    // order (the trainer concatenates the same way).
     let mut fc1_in = a;
+    if let Some(o1) = w.get("o1.w") {
+        fc1_in.extend(online_branch(w, o1, online, s_f1)?);
+    }
     fc1_in.extend(quantize_i8(features, s_f1));
     if fc1_in.len() != f1_in {
         return Err(Error::BadWeights("fc1 input size mismatch"));
@@ -119,13 +130,48 @@ pub fn recognize(
     Ok(rank_logits(&logits, k))
 }
 
-fn dims4(t: &super::weights::Tensor) -> (usize, usize, usize, usize) {
+fn dims4(t: &Tensor) -> (usize, usize, usize, usize) {
     (
         t.dims[0] as usize,
         t.dims[1] as usize,
         t.dims[2] as usize,
         t.dims[3] as usize,
     )
+}
+
+/// The optional online-channel branch (DESIGN §3b): a 1-D conv over the `[channels ×
+/// ONLINE_POINTS]` trajectory features, run through `conv2d_i8` as a height-1 conv
+/// and requantized to `s_out` (the fc1 input scale) so its flattened int8
+/// activations concatenate with the CNN flatten. Channels + kernel width come from
+/// the weight tensor; the stride is fixed at `ONLINE_STRIDE` (matched by the trainer).
+fn online_branch(w: &Weights, o1: &Tensor, online: &[f32], s_out: f32) -> Result<Vec<i8>> {
+    let o1b = w
+        .get("o1.b")
+        .ok_or(Error::BadWeights("online bias missing"))?
+        .as_i32();
+    let s_o1 = scalar(w, "o1.in_scale")?;
+    if o1.dims.len() != 4 {
+        return Err(Error::BadWeights("online conv rank"));
+    }
+    let (oc, ic, kh, kw) = dims4(o1);
+    if kh != 1 || ic == 0 || online.len() != ic * ONLINE_POINTS {
+        return Err(Error::BadWeights("online input shape"));
+    }
+    let x = quantize_i8(online, s_o1);
+    let (acc, _oh, _ow) = conv2d_i8(
+        &x,
+        ic,
+        1,
+        ONLINE_POINTS,
+        o1.as_i8(),
+        oc,
+        kh,
+        kw,
+        &o1b,
+        ONLINE_STRIDE,
+        0,
+    );
+    Ok(requantize(&acc, s_o1 * o1.scale / s_out, true))
 }
 
 #[cfg(test)]
@@ -159,12 +205,12 @@ mod tests {
         let w = Weights::parse(&blob).unwrap();
         let bitmap = vec![0.5f32; 16];
         let feats = [0.2f32; 7];
-        let preds = recognize(&w, &bitmap, &feats, 4, 2).unwrap();
+        let preds = recognize(&w, &bitmap, &feats, &[], 4, 2).unwrap();
         assert_eq!(preds.len(), 2);
         let sum: f32 = preds.iter().map(|p| p.prob).sum();
         assert!((sum - 1.0).abs() < 1e-4 || sum < 1.0); // top-2 is a prefix of the full softmax
                                                         // deterministic
-        let again = recognize(&w, &bitmap, &feats, 4, 2).unwrap();
+        let again = recognize(&w, &bitmap, &feats, &[], 4, 2).unwrap();
         assert_eq!(preds, again);
     }
 
@@ -174,7 +220,7 @@ mod tests {
         // fc2 routes all of it to class 0 → class 0 must win, through the full stack.
         let blob = tiny(&[0i8; 16], &[1000, 1000], &[100, 100, 0, 0], &[0, 0], 2);
         let w = Weights::parse(&blob).unwrap();
-        let preds = recognize(&w, &[0.5f32; 16], &[0.0f32; 7], 4, 2).unwrap();
+        let preds = recognize(&w, &[0.5f32; 16], &[0.0f32; 7], &[], 4, 2).unwrap();
         assert_eq!(preds[0].class, 0);
         assert!(preds[0].prob > preds[1].prob);
     }
@@ -184,10 +230,48 @@ mod tests {
         // Missing tensors.
         let empty = WeightsWriter::new().finish();
         let w = Weights::parse(&empty).unwrap();
-        assert!(recognize(&w, &[0.0; 16], &[0.0; 7], 4, 2).is_err());
+        assert!(recognize(&w, &[0.0; 16], &[0.0; 7], &[], 4, 2).is_err());
         // Wrong bitmap size.
         let blob = tiny(&[1i8; 16], &[0, 0], &[1i8; 4], &[0, 0], 2);
         let w = Weights::parse(&blob).unwrap();
-        assert!(recognize(&w, &[0.0; 9], &[0.0; 7], 4, 2).is_err());
+        assert!(recognize(&w, &[0.0; 9], &[0.0; 7], &[], 4, 2).is_err());
+    }
+
+    #[test]
+    fn online_branch_runs_and_validates_shape() {
+        // A tiny model WITH an online branch (o1.*): recognize must run the 1-D conv
+        // path, and the fc1 input accounting (cnn + online + globals) must line up.
+        let (oc, ic, kw) = (2usize, 4usize, 5usize); // ic = ONLINE_CHANNELS
+        let online_flat = oc * ((ONLINE_POINTS - kw) / ONLINE_STRIDE + 1); // 2 * 30 = 60
+        let fc1_in = 1 + online_flat + 7; // cnn(1) + online(60) + globals(7)
+        let mut w = WeightsWriter::new();
+        w.i8("c1.w", &[1, 1, 3, 3], 0.01, &[1i8; 9]);
+        w.i32("c1.b", &[1], &[0]);
+        w.f32("c1.in_scale", &[1], &[0.1]);
+        w.i8("c2.w", &[1, 1, 3, 3], 0.01, &[1i8; 9]);
+        w.i32("c2.b", &[1], &[0]);
+        w.f32("c2.in_scale", &[1], &[0.1]);
+        w.i8(
+            "o1.w",
+            &[oc as u32, ic as u32, 1, kw as u32],
+            0.01,
+            &vec![1i8; oc * ic * kw],
+        );
+        w.i32("o1.b", &[oc as u32], &vec![0i32; oc]);
+        w.f32("o1.in_scale", &[1], &[0.1]);
+        w.i8("f1.w", &[2, fc1_in as u32], 0.01, &vec![1i8; 2 * fc1_in]);
+        w.i32("f1.b", &[2], &[0, 0]);
+        w.f32("f1.in_scale", &[1], &[0.1]);
+        w.i8("f2.w", &[2, 2], 0.01, &[1i8; 4]);
+        w.i32("f2.b", &[2], &[0, 0]);
+        w.f32("f2.in_scale", &[1], &[0.1]);
+        let blob = w.finish();
+        let weights = Weights::parse(&blob).unwrap();
+
+        let online = vec![0.3f32; ic * ONLINE_POINTS];
+        let preds = recognize(&weights, &[0.5f32; 16], &[0.2f32; 7], &online, 4, 2).unwrap();
+        assert_eq!(preds.len(), 2);
+        // A wrong-length online tensor is rejected up front, not a panic.
+        assert!(recognize(&weights, &[0.5f32; 16], &[0.2f32; 7], &[0.0; 10], 4, 2).is_err());
     }
 }

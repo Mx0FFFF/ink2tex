@@ -24,10 +24,14 @@ CROHME exact-match number (needs the full-data model + more segmentation work).
 **M1 recognizer works end-to-end on real data.** The full stack — Detexify strokes
 → rasterize → PyTorch train → int8 quantize → Rust int8 forward pass → labelled
 top-5 — is built and validated: trained on **39,554 real samples / 1,123 classes**
-(from `detexify-next`, since the classic Drive dump 401s), **89.5% held-out top-5**
-(affine augmentation + dropout in `train.py` lifted it from 86.5%; the full 342k Drive
-set stays inaccessible, so augmentation is the accuracy lever),
-and the exported `train/model.iwt` runs through the hand-rolled int8 kernel in Rust
+(from `detexify-next`, since the classic Drive dump 401s), **90.8% held-out top-5**,
+reproducibly (training is now seeded + best-on-validation checkpointed). Accuracy
+climbed 86.5% → 89.5% (affine augmentation + dropout) → **90.8% by adding the online
+channel** (DESIGN §3b) — the free temporal signal a small 1-D conv reads off the
+resampled `[dx, dy, pen_up, curvature]` pen trajectory (`core::classify::online`),
+fused with the bitmap CNN at the fc1 layer; the full 342k Drive set stays inaccessible,
+so these are the accuracy levers.
+The exported `train/model.iwt` runs through the hand-rolled int8 kernel in Rust
 (`--eval`) with the quantization intact. **And it runs ON THE DEVICE**: `crates/rm
 --recognize` (`make recognize`) rasterizes captured ink → int8 CNN → top-5 LaTeX on
 stdout (streamed over SSH, so **no rm2fb needed**), and the armv7 Cortex-A7 produced
@@ -37,9 +41,9 @@ on the tablet worked end-to-end. The repo is now **committed** (`f047779`, branc
 `main`) and the `tests/corpus` regression suite is seeded (xi, with the reference model
 committed so CI runs it). Remaining
 to ship M1: the live-pen loop is the same code (draw instead of `--from`; verified by
-composition — capture ✅ + recognize ✅); more accuracy would need the full 342k Drive
-set (inaccessible — needs a manual browser download) or the online-channel features
-(§3b); on-screen result display (needs the M4 typesetter); package for Toltec/Vellum.
+composition — capture ✅ + recognize ✅); the online channel (§3b) is now in, so more
+accuracy would need the full 342k Drive set (inaccessible — needs a manual browser
+download); on-screen result display (needs the M4 typesetter); package for Toltec/Vellum.
 The one lingering **M0** item is rm2fb for on-screen *inking* (recognition doesn't need it).
 
 - **Last session:** 2026-07-11 — full M0 build. Workspace (core/desktop/rm), Makefile,

@@ -9,7 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
-use ink2tex_core::classify::{global_features, rasterize, recognize, Labels, Weights};
+use ink2tex_core::classify::{
+    global_features, online_features, rasterize, recognize, Labels, Weights, ONLINE_POINTS,
+};
 use ink2tex_core::Ink;
 
 fn workspace_root() -> PathBuf {
@@ -50,6 +52,7 @@ fn corpus_symbols_classify_in_top5() {
             &weights,
             &rasterize(&ink.strokes, 32),
             &global_features(&ink.strokes),
+            &online_features(&ink.strokes, ONLINE_POINTS),
             32,
             5,
         )

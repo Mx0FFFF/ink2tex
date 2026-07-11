@@ -6,7 +6,10 @@
 //! single left-to-right line like `2x + 3 = 7`: segmentation (`crate::segment`)
 //! gives the symbols in order, and each is fed through the same classifier M1 uses.
 
-use crate::classify::{global_features, rasterize, recognize, Labels, Prediction, Weights};
+use crate::classify::{
+    global_features, online_features, rasterize, recognize, Labels, Prediction, Weights,
+    ONLINE_POINTS,
+};
 use crate::error::Result;
 use crate::latex::{symbol_command, to_latex};
 use crate::segment::segment;
@@ -27,7 +30,8 @@ pub fn recognize_line(ink: &Ink, weights: &Weights, k: usize) -> Result<Vec<Line
         let strokes: Vec<Stroke> = group.iter().map(|&i| ink.strokes[i].clone()).collect();
         let bitmap = rasterize(&strokes, 32);
         let feats = global_features(&strokes);
-        let predictions = recognize(weights, &bitmap, &feats, 32, k)?;
+        let online = online_features(&strokes, ONLINE_POINTS);
+        let predictions = recognize(weights, &bitmap, &feats, &online, 32, k)?;
         out.push(LineSymbol {
             strokes: group,
             predictions,

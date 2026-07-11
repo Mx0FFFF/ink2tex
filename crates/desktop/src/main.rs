@@ -20,7 +20,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use ink2tex_core::classify::raster::NUM_FEATURES;
-use ink2tex_core::classify::{global_features, rasterize, recognize, Labels, Weights};
+use ink2tex_core::classify::{
+    global_features, online_features, rasterize, recognize, Labels, Weights, ONLINE_CHANNELS,
+    ONLINE_POINTS,
+};
 use ink2tex_core::Ink;
 
 #[derive(Parser, Debug)]
@@ -123,11 +126,12 @@ fn main() -> Result<()> {
             .with_context(|| format!("parsing {} as .ink", ink_path.display()))?;
         let bitmap = rasterize(&ink.strokes, 32);
         let feats = global_features(&ink.strokes);
+        let online = online_features(&ink.strokes, ONLINE_POINTS);
         let blob = std::fs::read(&model_path)
             .with_context(|| format!("reading {}", model_path.display()))?;
         let weights = Weights::parse(&blob).context("parsing model .iwt")?;
-        let preds =
-            recognize(&weights, &bitmap, &feats, 32, 5).context("classifier forward pass")?;
+        let preds = recognize(&weights, &bitmap, &feats, &online, 32, 5)
+            .context("classifier forward pass")?;
         let labels = match cli.labels {
             Some(p) => Some(Labels::from_lines(
                 &std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?,
@@ -274,6 +278,7 @@ fn prepare_detexify(input: &Path, out_dir: &Path, size: usize) -> Result<()> {
 
     std::fs::create_dir_all(out_dir)?;
     let (mut images, mut feats, mut labels) = (Vec::new(), Vec::new(), Vec::new());
+    let mut online = Vec::new();
     for s in &samples {
         for v in rasterize(&s.strokes, size) {
             images.push((v.clamp(0.0, 1.0) * 255.0).round() as u8);
@@ -281,25 +286,30 @@ fn prepare_detexify(input: &Path, out_dir: &Path, size: usize) -> Result<()> {
         for f in global_features(&s.strokes) {
             feats.extend_from_slice(&f.to_le_bytes());
         }
+        for v in online_features(&s.strokes, ONLINE_POINTS) {
+            online.extend_from_slice(&v.to_le_bytes());
+        }
         labels.extend_from_slice(&index[s.class.as_str()].to_le_bytes());
     }
 
     std::fs::write(out_dir.join("images.u8"), &images)?;
     std::fs::write(out_dir.join("features.f32"), &feats)?;
+    std::fs::write(out_dir.join("online.f32"), &online)?;
     std::fs::write(out_dir.join("labels.u32"), &labels)?;
     std::fs::write(out_dir.join("classes.txt"), classes.join("\n") + "\n")?;
     std::fs::write(
         out_dir.join("meta.json"),
         format!(
-            "{{\"n\": {}, \"size\": {}, \"num_features\": {}, \"num_classes\": {}}}\n",
+            "{{\"n\": {}, \"size\": {}, \"num_features\": {}, \"num_classes\": {}, \"online_len\": {}}}\n",
             samples.len(),
             size,
             NUM_FEATURES,
-            classes.len()
+            classes.len(),
+            ONLINE_CHANNELS * ONLINE_POINTS
         ),
     )?;
     eprintln!(
-        "prepared {} samples / {} classes → {}/ (images.u8, features.f32, labels.u32, classes.txt, meta.json)",
+        "prepared {} samples / {} classes → {}/ (images.u8, features.f32, online.f32, labels.u32, classes.txt, meta.json)",
         samples.len(),
         classes.len(),
         out_dir.display()
@@ -345,6 +355,12 @@ fn eval_dataset(dir: &Path, model_path: &Path) -> Result<()> {
     let images = std::fs::read(dir.join("images.u8"))?;
     let feat_bytes = std::fs::read(dir.join("features.f32"))?;
     let label_bytes = std::fs::read(dir.join("labels.u32"))?;
+    let online_len = meta["online_len"].as_u64().unwrap_or(0) as usize;
+    let online_all: Vec<f32> = std::fs::read(dir.join("online.f32"))
+        .unwrap_or_default()
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
     let blob = std::fs::read(model_path)?;
     let weights = Weights::parse(&blob).context("parsing model .iwt")?;
 
@@ -365,8 +381,13 @@ fn eval_dataset(dir: &Path, model_path: &Path) -> Result<()> {
             .map(|&b| b as f32 / 255.0)
             .collect();
         let feats = &feats_all[i * nf..(i + 1) * nf];
+        let online: &[f32] = if online_len > 0 && !online_all.is_empty() {
+            &online_all[i * online_len..(i + 1) * online_len]
+        } else {
+            &[]
+        };
         let label = labels_all[i] as usize;
-        let preds = recognize(&weights, &bitmap, feats, size, 5)?;
+        let preds = recognize(&weights, &bitmap, feats, online, size, 5)?;
         if preds.first().map(|p| p.class) == Some(label) {
             top1 += 1;
         }

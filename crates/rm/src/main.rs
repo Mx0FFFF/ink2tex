@@ -183,7 +183,9 @@ fn record(args: &[String]) -> Result<()> {
 /// This is a thin wrapper over the device-free `core::classify` — all the real work
 /// (rasterize, quantize, conv/dense, softmax) is in core.
 fn recognize(args: &[String]) -> Result<()> {
-    use ink2tex_core::classify::{global_features, rasterize, Labels, Weights};
+    use ink2tex_core::classify::{
+        global_features, online_features, rasterize, Labels, Weights, ONLINE_POINTS,
+    };
 
     let model = flag(args, "--model").context("--recognize needs --model <iwt>")?;
     let ink = match flag(args, "--from") {
@@ -205,7 +207,8 @@ fn recognize(args: &[String]) -> Result<()> {
     let t0 = std::time::Instant::now();
     let bitmap = rasterize(&ink.strokes, 32);
     let feats = global_features(&ink.strokes);
-    let preds = ink2tex_core::classify::recognize(&weights, &bitmap, &feats, 32, 5)
+    let online = online_features(&ink.strokes, ONLINE_POINTS);
+    let preds = ink2tex_core::classify::recognize(&weights, &bitmap, &feats, &online, 32, 5)
         .context("classifier forward pass")?;
     eprintln!(
         "inference: {:.2} ms (rasterize + int8 CNN)",

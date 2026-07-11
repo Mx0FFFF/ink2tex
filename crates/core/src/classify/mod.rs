@@ -11,10 +11,12 @@
 
 pub mod kernel;
 pub mod model;
+pub mod online;
 pub mod raster;
 pub mod weights;
 
 pub use model::recognize;
+pub use online::{online_features, ONLINE_CHANNELS, ONLINE_POINTS};
 pub use raster::{global_features, rasterize};
 pub use weights::{Weights, WeightsWriter};
 
