@@ -15,7 +15,11 @@ and the exported `train/model.iwt` runs through the hand-rolled int8 kernel in R
 (`--eval`) with the quantization intact. **And it runs ON THE DEVICE**: `crates/rm
 --recognize` (`make recognize`) rasterizes captured ink → int8 CNN → top-5 LaTeX on
 stdout (streamed over SSH, so **no rm2fb needed**), and the armv7 Cortex-A7 produced
-the **bit-identical** top-5 to x86 — the quantized math is arch-consistent. Remaining
+the **bit-identical** top-5 to x86 — the quantized math is arch-consistent, at
+**~18 ms/symbol** (M1's `<50 ms` inference criterion, met). A **live draw-to-recognize**
+on the tablet worked end-to-end. The repo is now **committed** (`f047779`, branch
+`main`) and the `tests/corpus` regression suite is seeded (xi, with the reference model
+committed so CI runs it). Remaining
 to ship M1: the live-pen loop is the same code (draw instead of `--from`; verified by
 composition — capture ✅ + recognize ✅); optionally train on the full 342k set for
 accuracy; on-screen result display (needs the M4 typesetter); package for Toltec/Vellum.
