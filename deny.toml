@@ -1,0 +1,33 @@
+# cargo-deny — enforces NON-NEGOTIABLE #1 (CLAUDE.md / DESIGN.md §3):
+#   NEVER add an ML runtime dependency. The hand-rolled int8 kernel IS the project.
+# CI runs `cargo deny check bans`; so does `make check-bans`.
+
+[bans]
+multiple-versions = "allow" # out of scope for this file
+wildcards = "allow"         # out of scope for this file
+
+# Presence of any of these means someone linked a tensor/ML runtime. Fail the build.
+deny = [
+    { crate = "tract-core" },
+    { crate = "tract-onnx" },
+    { crate = "tract-hir" },
+    { crate = "tract-linalg" },
+    { crate = "tract-nnef" },
+    { crate = "ort" },
+    { crate = "onnxruntime" },
+    { crate = "onnxruntime-sys" },
+    { crate = "candle-core" },
+    { crate = "candle-nn" },
+    { crate = "candle-transformers" },
+    { crate = "tflite" },
+    { crate = "tflitec" },
+    { crate = "tensorflow" },
+    { crate = "tensorflow-sys" },
+    { crate = "burn" },
+    { crate = "burn-core" },
+    { crate = "burn-tensor" },
+    { crate = "torch-sys" },
+    { crate = "tch" },
+    { crate = "dfdx" },
+    { crate = "luminal" },
+]

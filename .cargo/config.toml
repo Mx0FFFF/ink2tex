@@ -1,0 +1,5 @@
+# Cross-compilation for the reMarkable 2 (armv7). `make build-rm` adds the target.
+# The linker below ships in the `gcc-arm-linux-gnueabihf` package (Debian/Ubuntu);
+# alternatively use `cross`. Only exercised by `make build-rm`, never laptop builds.
+[target.armv7-unknown-linux-gnueabihf]
+linker = "arm-linux-gnueabihf-gcc"

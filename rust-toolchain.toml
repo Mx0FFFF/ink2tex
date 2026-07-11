@@ -1,0 +1,4 @@
+[toolchain]
+# Build with stable; the MSRV *contract* (1.80) is declared in Cargo.toml.
+channel = "stable"
+components = ["clippy", "rustfmt"]

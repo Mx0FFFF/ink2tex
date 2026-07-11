@@ -1,0 +1,27 @@
+[package]
+name = "ink2tex-rm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "reMarkable 2 device frontend. The ONLY device-coupled crate (~500 LOC ceiling)."
+
+[[bin]]
+name = "ink2tex-rm"
+path = "src/main.rs"
+
+[dependencies]
+ink2tex-core = { path = "../core" }
+anyhow = { workspace = true }
+# Raw syscalls (open/ioctl/read) for the hand-rolled evdev layer. We deliberately
+# do NOT use the `evdev` crate — ioctl-by-hand is the learning surface.
+libc = "0.2"
+
+# libremarkable (framebuffer + E-Ink waveforms) is a DEVICE-ONLY dependency —
+# pulled only when building for armv7, so host `cargo test` stays fast and keeps
+# exercising the portable logic (evdev encoding, transform, capture). Don't
+# reimplement rm2fb; libremarkable bundles the client.
+[target.'cfg(target_arch = "arm")'.dependencies]
+# Only the framebuffer + drawing + E-Ink refresh path; not libremarkable's Lua /
+# image / text / second input stack (we do our own evdev).
+libremarkable = { version = "0.6", default-features = false, features = ["framebuffer-drawing"] }

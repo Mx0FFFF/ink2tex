@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/desktop", "crates/rm"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.80" # libremarkable's floor (CLAUDE.md)
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# --- core (device-free; keep this list tiny, it cross-compiles to armv7) ---
+thiserror = "1"
+# --- binaries only ---
+anyhow = "1"
+# --- desktop harness (never ships to the device; see DESIGN.md §3) ---
+clap = { version = "4", features = ["derive"] }
+tiny-skia = "0.11"
+
+# Release builds target a 1 GB dual-core armv7 device and, later, a hot int8
+# inference loop (DESIGN.md §3). Favor speed; LTO + strip keep size sane.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

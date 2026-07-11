@@ -1,0 +1,21 @@
+[package]
+name = "ink2tex-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Dev harness + headless replay renderer — the agent's eyes. Never ships to the device."
+
+[[bin]]
+name = "ink2tex-desktop"
+path = "src/main.rs"
+
+[dependencies]
+ink2tex-core = { path = "../core" }
+anyhow = { workspace = true }
+# CLI grows flags across milestones (--replay, --synth, later --show-graph/tree).
+clap = { workspace = true }
+# Pure-Rust rasterizer (no system libs); desktop never cross-compiles to the device.
+tiny-skia = { workspace = true }
+# Detexify training data is JSON; parse it dynamically here (training-time tooling only).
+serde_json = "1"

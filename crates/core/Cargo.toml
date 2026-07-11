@@ -1,0 +1,10 @@
+[package]
+name = "ink2tex-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Device-free handwritten-math -> LaTeX recognizer core. The whole project; everything else is a frontend."
+
+[dependencies]
+thiserror = { workspace = true }

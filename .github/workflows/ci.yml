@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core-and-guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # The regression suite = the corpus. This is the project's immune system.
+      - name: core tests
+        run: cargo test -p ink2tex-core
+
+      # Guardrail: core must stay device-free (NON-NEGOTIABLE #2).
+      - name: core purity
+        run: bash scripts/check-core-purity.sh
+
+      # Guardrail: no ML runtime, ever (NON-NEGOTIABLE #1).
+      - name: install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: ML-runtime ban
+        run: cargo deny check bans
+
+      - name: format
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  cross-build-rm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-unknown-linux-gnueabihf
+      - name: cross linker
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-linux-gnueabihf
+      - name: cross-compile device frontend
+        run: cargo build -p ink2tex-rm --release --target armv7-unknown-linux-gnueabihf
