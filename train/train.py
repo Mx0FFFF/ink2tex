@@ -63,15 +63,37 @@ def build_model(nf, n_classes, size):
             self.pool = nn.MaxPool2d(2)
             self.f1 = nn.Linear(flat + nf, FC1)
             self.f2 = nn.Linear(FC1, n_classes)
+            self.drop = nn.Dropout(0.3) # regularize: 35 samples/class is little data
 
         def forward(self, x, feats):
             x = self.pool(torch.relu(self.c1(x)))
             x = self.pool(torch.relu(self.c2(x)))
             x = torch.cat([x.flatten(1), feats], dim=1)
-            x = torch.relu(self.f1(x))
+            x = self.drop(torch.relu(self.f1(x)))
             return self.f2(x)
 
     return Net()
+
+
+def augment(x):
+    """Random affine (rotation, scale, translation) on a batch of 1×H×W bitmaps —
+    cheap synthetic variety that effectively multiplies our limited data and makes the
+    classifier robust to how a symbol is drawn. Train-time ONLY (inference sees the
+    clean rasterization). This is the main accuracy lever when more data isn't
+    available (the full 342k Detexify Drive dump is inaccessible)."""
+    import torch
+
+    b = x.shape[0]
+    ang = (torch.rand(b) - 0.5) * 0.4 # ±0.2 rad
+    scl = 1.0 + (torch.rand(b) - 0.5) * 0.3 # ±15%
+    tx = (torch.rand(b) - 0.5) * 0.2
+    ty = (torch.rand(b) - 0.5) * 0.2
+    cos, sin = torch.cos(ang) * scl, torch.sin(ang) * scl
+    theta = torch.zeros(b, 2, 3)
+    theta[:, 0, 0], theta[:, 0, 1], theta[:, 0, 2] = cos, -sin, tx
+    theta[:, 1, 0], theta[:, 1, 1], theta[:, 1, 2] = sin, cos, ty
+    grid = torch.nn.functional.affine_grid(theta, list(x.shape), align_corners=False)
+    return torch.nn.functional.grid_sample(x, grid, align_corners=False)
 
 
 def _batch(X, F, y, idx):
@@ -110,7 +132,7 @@ def train(model, X, F, y, epochs, lr, val_frac, bs):
     cut = max(1, int(n * (1 - val_frac)))
     tr, va = idx[:cut].copy(), idx[cut:].copy()
 
-    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     loss_fn = torch.nn.CrossEntropyLoss()
     for ep in range(epochs):
         model.train()
@@ -118,6 +140,7 @@ def train(model, X, F, y, epochs, lr, val_frac, bs):
         total = 0.0
         for i in range(0, len(tr), bs):
             xb, fb, yb = _batch(X, F, y, tr[i : i + bs])
+            xb = augment(xb) # train-time affine augmentation
             opt.zero_grad()
             loss = loss_fn(model(xb, fb), yb)
             loss.backward()
@@ -184,7 +207,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True, help="dataset dir from --prepare-detexify")
     ap.add_argument("--out", default="train/model.iwt")
-    ap.add_argument("--epochs", type=int, default=30)
+    ap.add_argument("--epochs", type=int, default=60)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--val-frac", type=float, default=0.1)
     ap.add_argument("--batch-size", type=int, default=256)

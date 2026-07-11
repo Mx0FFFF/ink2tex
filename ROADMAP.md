@@ -24,7 +24,9 @@ CROHME exact-match number (needs the full-data model + more segmentation work).
 **M1 recognizer works end-to-end on real data.** The full stack — Detexify strokes
 → rasterize → PyTorch train → int8 quantize → Rust int8 forward pass → labelled
 top-5 — is built and validated: trained on **39,554 real samples / 1,123 classes**
-(from `detexify-next`, since the classic Drive dump 401s), **86.5% float val top-5**,
+(from `detexify-next`, since the classic Drive dump 401s), **89.5% held-out top-5**
+(affine augmentation + dropout in `train.py` lifted it from 86.5%; the full 342k Drive
+set stays inaccessible, so augmentation is the accuracy lever),
 and the exported `train/model.iwt` runs through the hand-rolled int8 kernel in Rust
 (`--eval`) with the quantization intact. **And it runs ON THE DEVICE**: `crates/rm
 --recognize` (`make recognize`) rasterizes captured ink → int8 CNN → top-5 LaTeX on
@@ -35,8 +37,9 @@ on the tablet worked end-to-end. The repo is now **committed** (`f047779`, branc
 `main`) and the `tests/corpus` regression suite is seeded (xi, with the reference model
 committed so CI runs it). Remaining
 to ship M1: the live-pen loop is the same code (draw instead of `--from`; verified by
-composition — capture ✅ + recognize ✅); optionally train on the full 342k set for
-accuracy; on-screen result display (needs the M4 typesetter); package for Toltec/Vellum.
+composition — capture ✅ + recognize ✅); more accuracy would need the full 342k Drive
+set (inaccessible — needs a manual browser download) or the online-channel features
+(§3b); on-screen result display (needs the M4 typesetter); package for Toltec/Vellum.
 The one lingering **M0** item is rm2fb for on-screen *inking* (recognition doesn't need it).
 
 - **Last session:** 2026-07-11 — full M0 build. Workspace (core/desktop/rm), Makefile,
