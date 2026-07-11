@@ -7,6 +7,13 @@
 
 ## Current state
 
+**M1 shipped-quality; M2 underway.** M2 linear-expression recognition is now built:
+`core::segment` (greedy left-to-right stroke→symbol grouping, cap 4, DESIGN §4.2) +
+`core::line::recognize_line` (segment → classify each → reading order), exposed as
+`ink2tex-desktop --recognize-expr`. Verified on a composed two-symbol ink: it
+segments into 2 ordered symbols and classifies each (grouping a 3-stroke symbol,
+isolating a 1-stroke one). Delayed strokes / the hypothesis lattice remain M3.
+
 **M1 recognizer works end-to-end on real data.** The full stack — Detexify strokes
 → rasterize → PyTorch train → int8 quantize → Rust int8 forward pass → labelled
 top-5 — is built and validated: trained on **39,554 real samples / 1,123 classes**

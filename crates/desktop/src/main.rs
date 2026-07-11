@@ -78,6 +78,11 @@ struct Cli {
     #[arg(long, value_name = "DATASET_DIR")]
     eval: Option<PathBuf>,
 
+    /// Recognize a linear expression: segment the `.ink` into symbols and classify
+    /// each left-to-right (M2). Needs --model; --labels maps indices to commands.
+    #[arg(long, value_name = "INK")]
+    recognize_expr: Option<PathBuf>,
+
     /// Interactive harness — needs a display. Not implemented at M0.
     #[arg(long)]
     harness: bool,
@@ -137,6 +142,45 @@ fn main() -> Result<()> {
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("class {}", p.class));
             println!("  {}. {:>5.1}%  {}", i + 1, p.prob * 100.0, name);
+        }
+        return Ok(());
+    }
+
+    if let Some(ink_path) = cli.recognize_expr {
+        let model_path = cli.model.context("--recognize-expr needs --model <iwt>")?;
+        let bytes =
+            std::fs::read(&ink_path).with_context(|| format!("reading {}", ink_path.display()))?;
+        let ink = Ink::decode(&bytes)
+            .with_context(|| format!("parsing {} as .ink", ink_path.display()))?;
+        let blob = std::fs::read(&model_path)
+            .with_context(|| format!("reading {}", model_path.display()))?;
+        let weights = Weights::parse(&blob).context("parsing model .iwt")?;
+        let line =
+            ink2tex_core::recognize_line(&ink, &weights, 3).context("expression recognizer")?;
+        let labels = match cli.labels {
+            Some(p) => Some(Labels::from_lines(
+                &std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?,
+            )),
+            None => None,
+        };
+        let name = |c: usize| {
+            labels
+                .as_ref()
+                .and_then(|l| l.get(c))
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("class {c}"))
+        };
+        let seq: Vec<String> = line
+            .iter()
+            .filter_map(|s| s.predictions.first())
+            .map(|p| name(p.class))
+            .collect();
+        println!("line: {} symbol(s) → {}", line.len(), seq.join("  ·  "));
+        for (i, s) in line.iter().enumerate() {
+            println!("  symbol {} (strokes {:?}):", i + 1, s.strokes);
+            for p in &s.predictions {
+                println!("      {:>5.1}%  {}", p.prob * 100.0, name(p.class));
+            }
         }
         return Ok(());
     }

@@ -10,8 +10,12 @@
 pub mod classify;
 pub mod error;
 pub mod format;
+pub mod line;
+pub mod segment;
 pub mod stroke;
 
 pub use classify::Prediction;
 pub use error::{Error, Result};
+pub use line::{recognize_line, LineSymbol};
+pub use segment::segment;
 pub use stroke::{Ink, Point, Stroke};
