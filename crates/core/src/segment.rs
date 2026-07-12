@@ -203,7 +203,80 @@ pub fn segment(strokes: &[Stroke]) -> Vec<Vec<usize>> {
         }
     }
     groups.sort_by(|g, h| g.0.partial_cmp(&h.0).unwrap_or(core::cmp::Ordering::Equal));
-    groups.into_iter().map(|(_, idx)| idx).collect()
+    merge_stacked_bars(groups.into_iter().map(|(_, idx)| idx).collect(), strokes)
+}
+
+/// Merge the two bars of an `=` into one symbol group.
+///
+/// Proximity clustering can never do this on its own: the bars of a handwritten `=` sit
+/// 0.7–0.9 bar-widths apart (measured on device ink), while the merge threshold is a
+/// quarter of the median stroke size — so `=` always splits into two groups, each
+/// classifies as `-`, and `2x + 3 = 7` reads `2x + 3 - - 7`. The classifier has real
+/// device-collected `=` samples now; it just never gets shown the whole glyph.
+///
+/// Two groups merge only when they are BOTH single wide bars, of similar width, strongly
+/// x-overlapping, and close vertically. Each guard kills a real false positive:
+/// - *similar width* keeps a fraction bar from pairing with a `-` inside its numerator
+///   (`\frac{{a-b}}{{c}}` — the fraction bar is 2-3× wider);
+/// - *strong x-overlap* keeps neighbouring minus signs on one baseline apart
+///   (`a - b - c` — their bars never overlap in x);
+/// - *bar shape* keeps letters and digits out entirely.
+///
+/// `≡` (three bars) merges its closest two and leaves one `-` — the honest v1 limit,
+/// same family as DESIGN §4.2's stacked-bar caveat, and `≡` is a single trained glyph
+/// when drawn compactly anyway.
+fn merge_stacked_bars(groups: Vec<Vec<usize>>, strokes: &[Stroke]) -> Vec<Vec<usize>> {
+    let group_bbox = |g: &[usize]| -> Option<Bbox> {
+        let mut it = g.iter().filter_map(|&i| bbox(&strokes[i]));
+        let first = it.next()?;
+        Some(it.fold(first, |a, b| {
+            [
+                a[0].min(b[0]),
+                a[1].min(b[1]),
+                a[2].max(b[2]),
+                a[3].max(b[3]),
+            ]
+        }))
+    };
+    let is_bar = |g: &[usize]| -> Option<Bbox> {
+        if g.len() != 1 {
+            return None;
+        }
+        let b = group_bbox(g)?;
+        ((b[2] - b[0]) / (b[3] - b[1]).max(1e-6) > 2.5).then_some(b)
+    };
+
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    let mut i = 0;
+    while i < groups.len() {
+        let merged = (|| {
+            let a = is_bar(&groups[i])?;
+            // Left-to-right ordering puts the partner bar adjacent (same leftmost x).
+            let b = is_bar(groups.get(i + 1)?)?;
+            let (wa, wb) = (a[2] - a[0], b[2] - b[0]);
+            let overlap = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
+            let vgap = ((a[1] + a[3]) / 2.0 - (b[1] + b[3]) / 2.0).abs();
+            (wa.max(wb) / wa.min(wb).max(1e-6) < 1.8
+                && overlap > 0.6 * wa.min(wb)
+                && vgap < 1.2 * wa.max(wb))
+            .then(|| {
+                let mut g = groups[i].clone();
+                g.extend(&groups[i + 1]);
+                g
+            })
+        })();
+        match merged {
+            Some(g) => {
+                out.push(g);
+                i += 2;
+            }
+            None => {
+                out.push(groups[i].clone());
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -248,6 +321,41 @@ mod tests {
             glyph(0.40, 0.47, 0.06, 0.08),
         ]);
         assert_eq!(g.len(), 3, "fraction collapsed: {g:?}");
+    }
+
+    /// The two bars of a handwritten `=` sit ~0.8 bar-widths apart — far beyond the
+    /// proximity threshold — so without the stacked-bar merge every `=` splits into two
+    /// `-` symbols and `2x+3=7` reads `2x+3--7`. Geometry from real device ink.
+    #[test]
+    fn an_equals_sign_is_one_symbol_not_two_minuses() {
+        let g = segment(&[
+            stroke(&[(0.40, 0.470), (0.46, 0.472)]), // top bar
+            stroke(&[(0.40, 0.516), (0.46, 0.514)]), // bottom bar, ~0.75 widths below
+        ]);
+        assert_eq!(g.len(), 1, "= split into {g:?}");
+    }
+
+    /// …but three minus signs on one baseline must NOT chain-merge: their bars never
+    /// overlap in x, which is the guard that separates `a - b - c` from `=`.
+    #[test]
+    fn minus_signs_on_a_baseline_stay_separate() {
+        let g = segment(&[
+            stroke(&[(0.20, 0.50), (0.26, 0.50)]),
+            stroke(&[(0.40, 0.50), (0.46, 0.50)]),
+            stroke(&[(0.60, 0.50), (0.66, 0.50)]),
+        ]);
+        assert_eq!(g.len(), 3, "minuses merged: {g:?}");
+    }
+
+    /// …and a fraction bar must not swallow a minus inside the numerator: the widths
+    /// differ by >1.8x, which is what that guard is for. (`\frac{a-b}{c}` territory.)
+    #[test]
+    fn a_fraction_bar_does_not_pair_with_a_numerator_minus() {
+        let g = segment(&[
+            stroke(&[(0.42, 0.42), (0.48, 0.42)]), // '-' in the numerator, narrow
+            stroke(&[(0.30, 0.50), (0.62, 0.50)]), // fraction bar, ~5x wider
+        ]);
+        assert_eq!(g.len(), 2, "fraction bar swallowed the minus: {g:?}");
     }
 
     /// A selection lasso is not notation, but it is what exposed this, and it must not

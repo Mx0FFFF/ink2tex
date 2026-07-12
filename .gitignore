@@ -16,6 +16,7 @@ __pycache__/
 # Everything else is a rejected or intermediate experiment.
 /train/model_small.*
 /train/model_full.*
+/train/model_v2.*
 /train/model_v3.*
 # NOTE: train/model.iwt + train/model.labels.txt ARE committed — the reference
 # model for the tests/corpus regression suite (small; also lets `make recognize`

@@ -22,6 +22,11 @@
 /// classifier emits them: literals (`x`, `7`, `+`) for the HWRT-contributed tokens, and
 /// Detexify symbolIds (`latex:latex2e:alpha`) for the rest.
 pub const EXPRESSION_TOKENS: &[&str] = &[
+    // Device-collected tokens (train/collected/): absent from every public dataset.
+    "=",
+    "(",
+    ")",
+    "t",
     "latex:amssymb:geq",
     "latex:amssymb:gg",
     "latex:amssymb:leq",

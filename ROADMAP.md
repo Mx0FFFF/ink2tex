@@ -390,6 +390,29 @@ against the label space so a dead entry cannot silently narrow the mask.
 **Expression mode uses `model_v2` + `model_v2.counts.txt`** (both committed); the shipped M1
 package still carries v1 and is untouched.
 
+### ✅ The own-corpus era began (2026-07-12): 383 device-native samples, rescued from a quick sheet
+
+The user drew `= ( ) t 1 x +` (~50 each) — in xochitl rather than the collector, which
+turned out fine: the ink was recovered from the notebook's v6 `.rm` file (rmscene), clustered
+into symbols (an x-overlap pass re-pairs `=` bars, which sit ~0.8 bar-widths apart — beyond
+any proximity threshold), block-labeled, and **visually verified tile by tile**. Raw page +
+extraction script + NDJSON live in `train/collected/` — full provenance, the seed of the
+DESIGN §5 corpus. `=`, `(`, `)`, `t` exist in a model for the first time (label space → 1,192).
+
+**v4 (Detexify + HWRT + collected) is the expression model** — 96.5% micro / 86.1% macro
+through int8, the best yet. On the running `√x+1` benchmark: `x` **75.2% top-1** (was 44.5%),
+`1` climbs from invisible to rank 4, `+` slips to rank 3 behind the arrows on that particular
+wide-barred drawing — every symbol's truth is in the top-4, which is the correction-UI
+contract, and the e2e test now pins exactly that (top-1 `x`, correction-reach `+`/`1`)
+rather than one model's lucky string.
+
+**And `segment` merges stacked bars now**, or none of it would matter: a handwritten `=`
+splits at ~0.8 bar-widths against a 0.25 threshold, so every `=` read as `- -` before.
+Guards (width-ratio, x-overlap, bar-shape) each kill a real false positive; 3 tests.
+
+⇒ **Next: the first full-equation test.** Draw `2x + 3 = 7` on the tablet (`make record`) —
+every token in it exists now. Expect imperfection; demand correction reach.
+
 ⇒ **`--collect` remains the path to finishing the job** — `1` vs `⌉`, `x` vs `χ` calibration,
 and the three tokens that exist nowhere (`=`, `(`, `)`). The everyday tokens need device-native
 ink — which is precisely the corpus DESIGN §5 says does not exist and is worth building. Ballpark:
