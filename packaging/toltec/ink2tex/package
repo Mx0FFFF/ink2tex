@@ -4,11 +4,8 @@
 #
 # Toltec recipe for ink2tex. Format: https://github.com/toltec-dev/build/blob/main/docs/recipe-format.md
 #
-# ⚠️ `source` must point at a PUBLIC tarball before this can be submitted to
-#    toltec-dev/toltec: the build runs in a clean Docker image that fetches the source by
-#    URL and checks it against sha256sums. Publish a tagged release, then set the URL and
-#    replace the SKIP below with `sha256sum <tarball>`. Until then, build locally with
-#    `make ipk`, which packages the tree you already have.
+# Source is the published v0.1.0 tarball, pinned by sha256 — Toltec builds it in a clean
+# `rust:v3.3` image. `make ipk` builds the same package from a local tree.
 
 pkgnames=(ink2tex)
 pkgdesc="Recognize handwritten math symbols and get the LaTeX command — on the tablet, offline"
@@ -22,7 +19,7 @@ archs=(rm2)
 
 image=rust:v3.3
 source=(https://github.com/Mx0FFFF/ink2tex/archive/refs/tags/v0.1.0.zip)
-sha256sums=(SKIP)
+sha256sums=(12306a9d7f7032e286609fd9be68eedd635f4b72352f807fa04b56dd0e834da1)
 
 build() {
     # The device frontend is the only crate that touches the tablet; core is device-free.

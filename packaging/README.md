@@ -32,17 +32,17 @@ but Toltec. (On-screen *inking* would need `display`; that is not what this pack
 
 They install the same files. If you change one, change the other.
 
-## To actually release it
+## Releasing it
 
-1. **Publish the source.** The recipe's `source=` must be a public tarball — Toltec builds
-   in a clean room and will not take a local path. Push the repo, tag `v0.1.0`.
-2. Set `source=(.../v0.1.0.zip)` and replace `sha256sums=(SKIP)` with the real checksum.
-3. Fork [toltec-dev/toltec](https://github.com/toltec-dev/toltec), drop the recipe in
-   `package/ink2tex/package`, and open a PR against `testing`.
-4. It lands in `testing`, then graduates to `stable`.
+✅ Published: <https://github.com/Mx0FFFF/ink2tex>, tagged `v0.1.0`, and the recipe's
+`source=` is pinned to that tarball's sha256. The recipe is **submittable as-is**:
 
-Until step 1, the recipe is correct but unbuildable by Toltec — that is the *only* thing
-between here and a release, and it is a decision (publish the code), not a task.
+1. Fork [toltec-dev/toltec](https://github.com/toltec-dev/toltec).
+2. Copy `packaging/toltec/ink2tex/package` to `package/ink2tex/package`.
+3. Open a PR against the `testing` branch. It lands in `testing`, then graduates to `stable`.
+
+Bumping the version later means: retag, recompute the sha256 of the new tarball, bump
+`pkgver`, and PR again.
 
 ## Licensing, which is not optional here
 

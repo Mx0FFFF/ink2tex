@@ -53,7 +53,7 @@ python3 train/detexify_sql_to_ndjson.py ~/Downloads/detexify.sql.gz \
 #    so there is no train/infer skew. --classes pins the label space.
 cargo run --release -p ink2tex-desktop -- \
     --prepare-detexify train/detexify_raw/detexify.ndjson \
-    --out-dir train/dataset_full --classes train/dataset/classes.txt
+    --out-dir train/dataset_full --classes train/model.labels.txt
 #    → {images.u8, features.f32, online.f32, labels.u32, classes.txt, meta.json}
 
 # 3. train the int8 CNN, export the weights blob (+ labels), and keep the held-out split.

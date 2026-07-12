@@ -44,9 +44,9 @@ $(NDJSON): $(DUMP)
 	@mkdir -p $(dir $@)
 	python3 train/detexify_sql_to_ndjson.py $(DUMP) -o $@
 
-$(DATASET)/meta.json: $(NDJSON) train/dataset/classes.txt
+$(DATASET)/meta.json: $(NDJSON) train/model.labels.txt
 	cargo run -q --release -p ink2tex-desktop -- --prepare-detexify $(NDJSON) \
-	  --out-dir $(DATASET) --classes train/dataset/classes.txt
+	  --out-dir $(DATASET) --classes train/model.labels.txt
 
 dataset: $(DATASET)/meta.json
 
