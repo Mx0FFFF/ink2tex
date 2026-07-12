@@ -238,21 +238,52 @@ fn merge_stacked_bars(groups: Vec<Vec<usize>>, strokes: &[Stroke]) -> Vec<Vec<us
             ]
         }))
     };
-    let is_bar = |g: &[usize]| -> Option<Bbox> {
+    // A bar, allowing for slant. The first live equation test failed here: the user's
+    // `=` was written ~30° downhill, its bars' axis-aligned aspect fell below any sane
+    // threshold, and the merge never fired — one bar then classified as `\setminus`
+    // (which is exactly what a slanted bar is, to an upright-trained model). So measure
+    // elongation in the stroke's OWN frame: take the endpoint direction, require it
+    // within ±40° of horizontal, require the path to be straight (no `(`-curves), and
+    // require the rotated-frame aspect to clear the bar threshold.
+    let is_bar = |g: &[usize]| -> Option<(Bbox, f32)> {
         if g.len() != 1 {
             return None;
         }
-        let b = group_bbox(g)?;
-        ((b[2] - b[0]) / (b[3] - b[1]).max(1e-6) > 2.5).then_some(b)
+        let pts = &strokes[g[0]].points;
+        let (p0, p1) = (pts.first()?, pts.last()?);
+        let (dx, dy) = (p1.x - p0.x, p1.y - p0.y);
+        let len = dx.hypot(dy);
+        let theta = dy.atan2(dx.abs()); // sign-folded: direction within ±90°
+        if theta.abs() > 40f32.to_radians() {
+            return None; // too steep to be an = bar (that is a `/`, `|` or `1`)
+        }
+        // Straightness: a curve's path is much longer than its endpoint span.
+        let path: f32 = pts
+            .windows(2)
+            .map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y))
+            .sum();
+        if len < 1e-6 || path / len > 1.35 {
+            return None;
+        }
+        // Aspect in the bar's own frame: thickness = max perpendicular deviation.
+        let (ux, uy) = (dx / len, dy / len);
+        let thick = pts
+            .iter()
+            .map(|p| ((p.x - p0.x) * uy - (p.y - p0.y) * ux).abs())
+            .fold(0.0f32, f32::max);
+        (len / thick.max(1e-6) > 2.5).then(|| (group_bbox(g).unwrap(), theta))
     };
 
     let mut out: Vec<Vec<usize>> = Vec::new();
     let mut i = 0;
     while i < groups.len() {
         let merged = (|| {
-            let a = is_bar(&groups[i])?;
+            let (a, ta) = is_bar(&groups[i])?;
             // Left-to-right ordering puts the partner bar adjacent (same leftmost x).
-            let b = is_bar(groups.get(i + 1)?)?;
+            let (b, tb) = is_bar(groups.get(i + 1)?)?;
+            if (ta - tb).abs() > 25f32.to_radians() {
+                return None; // the two bars of one `=` slant TOGETHER
+            }
             let (wa, wb) = (a[2] - a[0], b[2] - b[0]);
             let overlap = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
             let vgap = ((a[1] + a[3]) / 2.0 - (b[1] + b[3]) / 2.0).abs();
@@ -356,6 +387,33 @@ mod tests {
             stroke(&[(0.30, 0.50), (0.62, 0.50)]), // fraction bar, ~5x wider
         ]);
         assert_eq!(g.len(), 2, "fraction bar swallowed the minus: {g:?}");
+    }
+
+    /// The first live equation failed here: an `=` written ~17° downhill has bars whose
+    /// axis-aligned aspect is mediocre, and the old horizontal-only bar test let them
+    /// through as two separate `\setminus`-ish strokes. The bar test measures elongation
+    /// in the stroke's own frame now.
+    #[test]
+    fn a_slanted_equals_still_merges() {
+        let g = segment(&[
+            stroke(&[(0.40, 0.470), (0.46, 0.488)]), // top bar, sloping down-right
+            stroke(&[(0.40, 0.516), (0.46, 0.534)]), // bottom bar, same slant
+        ]);
+        assert_eq!(g.len(), 1, "slanted = split: {g:?}");
+    }
+
+    /// …but curves must never pass the bar test: a curve's path is far longer than its
+    /// endpoint span, which is what the straightness guard measures. Two stacked arcs
+    /// (think `⌒` over `⌣`) satisfy every OTHER `=` condition — similar width, strong
+    /// x-overlap, small vertical gap — so straightness is the only thing keeping them
+    /// from reading as an equals sign.
+    #[test]
+    fn stacked_curves_are_not_an_equals_sign() {
+        let g = segment(&[
+            stroke(&[(0.40, 0.46), (0.43, 0.41), (0.46, 0.46)]), // top arc ⌒
+            stroke(&[(0.40, 0.52), (0.43, 0.57), (0.46, 0.52)]), // bottom arc ⌣
+        ]);
+        assert_eq!(g.len(), 2, "arcs merged as an =: {g:?}");
     }
 
     /// A selection lasso is not notation, but it is what exposed this, and it must not

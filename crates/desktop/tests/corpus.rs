@@ -197,3 +197,67 @@ fn everyday_tokens_win_on_real_ink_in_expression_mode() {
         names[3]
     );
 }
+
+/// The first full equation ever recognized end-to-end: a real `2x + 3 = 7`, drawn on the
+/// tablet (2026-07-13; rotated upright — it was written in landscape, and the capture
+/// frame is portrait). Pins the whole chain at once: proximity segmentation, the
+/// slant-aware stacked-bar merge (the `=` was written ~17° downhill and used to read as
+/// `\setminus` + `-`), baseline detrending (the line drifts downhill and used to parse as
+/// a tower of subscripts), mixed-height script regions (the tall `2` used to take `x` as
+/// a subscript), the expression vocabulary, and the training-prior correction.
+///
+/// The `7` reads as `>` at top-1 — honestly: drawn without a top-left hook it IS a wide
+/// open angle — so the assertion demands its truth within correction reach, which is the
+/// product's actual contract.
+#[test]
+fn the_first_full_equation_2x_plus_3_equals_7() {
+    let root = workspace_root();
+    let model_path = root.join("train/model_v4.iwt");
+    if !model_path.exists() {
+        eprintln!("skipping: {} missing", model_path.display());
+        return;
+    }
+    let blob = std::fs::read(&model_path).expect("read model");
+    let weights = Weights::parse(&blob).expect("parse");
+    let labels = Labels::from_lines(
+        &std::fs::read_to_string(root.join("train/model_v4.labels.txt")).expect("labels"),
+    );
+    let counts: Vec<u32> = std::fs::read_to_string(root.join("train/model_v4.counts.txt"))
+        .expect("counts")
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    let ink = Ink::decode(
+        &std::fs::read(root.join("crates/core/tests/data/equation_2x_plus_3_eq_7.ink"))
+            .expect("fixture"),
+    )
+    .expect("decode");
+
+    let line =
+        ink2tex_core::recognize_line(&ink, &weights, &labels, Some(&counts), 5).expect("recognize");
+    let names: Vec<Vec<&str>> = line
+        .iter()
+        .map(|s| {
+            s.predictions
+                .iter()
+                .filter_map(|p| labels.get(p.class))
+                .collect()
+        })
+        .collect();
+    assert_eq!(line.len(), 6, "2, x, +, 3, =, 7 — six symbols, = merged");
+    for (i, want) in ["2", "x", "+", "3", "="].iter().enumerate() {
+        assert_eq!(&names[i][0], want, "symbol {i}: {:?}", names[i]);
+    }
+    assert!(
+        names[5].contains(&"7"),
+        "7 must be in correction reach: {:?}",
+        names[5]
+    );
+
+    let latex = ink2tex_core::recognize_expression(&ink, &weights, &labels, Some(&counts), 3)
+        .expect("latex");
+    assert!(
+        latex.starts_with("2x+3="),
+        "flat baseline parse, got {latex:?}"
+    );
+}

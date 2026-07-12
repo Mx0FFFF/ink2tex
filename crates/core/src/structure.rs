@@ -119,7 +119,59 @@ struct Unit {
 
 /// Parse positioned symbols into an SLT.
 pub fn parse(symbols: &[Symbol]) -> Slt {
-    baseline(form_units(symbols))
+    baseline(form_units(&detrend(symbols)))
+}
+
+/// Remove the writing slant before any script decision is made.
+///
+/// Real handwriting drifts: the first live equation test wrote `2x + 3 = 7` going
+/// downhill, each symbol a little lower than the last — and this stage, which judges
+/// super/subscripts by vertical offset against a *horizontal* baseline, dutifully parsed
+/// it as `2_{x_{+3…}}`, a tower of subscripts. The drift was global, not per-symbol; the
+/// standard HMER fix is to fit the line's own baseline and judge offsets against *it*.
+///
+/// Least-squares line through the symbol centers, then shear each bbox by the trend.
+/// Guards: at least four symbols (fewer cannot distinguish drift from structure), and a
+/// slope under ~20° (steeper is not drift — it is layout, e.g. a vertical stack, and a
+/// fraction's centers share x anyway so they barely move a fit). A genuine superscript
+/// pulls the fit by 1/n and survives comfortably (tested).
+fn detrend(symbols: &[Symbol]) -> Vec<Symbol> {
+    if symbols.len() < 4 {
+        return symbols.to_vec();
+    }
+    let n = symbols.len() as f32;
+    let (mut sx, mut sy, mut sxx, mut sxy) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    for s in symbols {
+        let (cx, cy) = (s.bbox.cx(), s.bbox.cy());
+        sx += cx;
+        sy += cy;
+        sxx += cx * cx;
+        sxy += cx * cy;
+    }
+    let denom = n * sxx - sx * sx;
+    if denom.abs() < 1e-9 {
+        return symbols.to_vec(); // vertically stacked: no horizontal extent to fit
+    }
+    let slope = (n * sxy - sx * sy) / denom;
+    if slope.abs() > 0.36 {
+        return symbols.to_vec(); // >~20°: structure, not slant
+    }
+    let cx0 = sx / n;
+    symbols
+        .iter()
+        .map(|s| {
+            let dy = slope * (s.bbox.cx() - cx0);
+            Symbol::new(
+                s.label.clone(),
+                BBox::new(
+                    s.bbox.min_x,
+                    s.bbox.min_y - dy,
+                    s.bbox.max_x,
+                    s.bbox.max_y - dy,
+                ),
+            )
+        })
+        .collect()
 }
 
 /// Threshold factor (fraction of a symbol's height) for region classification.
@@ -338,10 +390,19 @@ fn baseline(mut units: Vec<Unit>) -> Slt {
         let mut j = i + 1;
         while j < units.len() {
             let u = &units[j];
-            let dy = u.bbox.cy() - base_box.cy();
-            let thresh = SCRIPT_DY * base_box.h().max(1e-6);
-            let above = dy < -thresh;
-            let below = dy > thresh;
+            // Judge scripts by the neighbour's EXTREMITIES against the base's midline,
+            // not centre-against-centre. Centre offsets break under mixed glyph heights:
+            // in the first live equation, a tall `2` followed by a short `x` on the SAME
+            // written line put x's centre far below 2's centre, and `2x` parsed as
+            // `2_{x}`. A superscript's *bottom* clears the midline; a subscript's *top*
+            // falls below it; a baseline neighbour straddles it — whatever its height.
+            // Margin scales with the NEIGHBOUR's height, not the base's: a tall base
+            // (∫, Σ) would otherwise demand its small limits clear an enormous margin —
+            // \int_{a}^{b} broke exactly there — while a small neighbour needs only a
+            // small dead-zone around the midline to absorb jitter.
+            let margin = SCRIPT_DY * u.bbox.h().max(1e-6);
+            let above = u.bbox.max_y < base_box.cy() - margin;
+            let below = u.bbox.min_y > base_box.cy() + margin;
             if above {
                 sup.push(u.clone());
                 j += 1;
@@ -508,6 +569,34 @@ mod tests {
                 "{label} was not treated as a radical — its contents fell outside it"
             );
         }
+    }
+
+    /// The first live equation: `2x + 3 = 7` written going downhill. Before detrending,
+    /// every symbol sat lower than its predecessor and the parse was a tower of
+    /// subscripts: `2_{x_{+3…}}`. Geometry lifted from the real capture.
+    #[test]
+    fn a_downhill_baseline_is_slant_not_subscripts() {
+        let mut syms = Vec::new();
+        for (i, label) in ["2", "x", "+", "3", "=", "7"].iter().enumerate() {
+            let x = 0.20 + i as f32 * 0.08;
+            let y = 0.40 + i as f32 * 0.018; // steady downhill drift, ~13°
+            syms.push(sym(label, x, y, x + 0.06, y + 0.08));
+        }
+        assert_eq!(latex(&syms), "2x+3=7", "drift must not become scripts");
+    }
+
+    /// …and a REAL superscript must survive the detrend: its offset is far larger than
+    /// any plausible drift residual.
+    #[test]
+    fn a_genuine_superscript_survives_detrending() {
+        let syms = [
+            sym("2", 0.20, 0.40, 0.26, 0.48),
+            sym("x", 0.28, 0.41, 0.34, 0.49),
+            sym("2", 0.35, 0.33, 0.39, 0.38), // small, high: x squared
+            sym("+", 0.44, 0.42, 0.50, 0.50),
+            sym("1", 0.52, 0.42, 0.56, 0.50),
+        ];
+        assert_eq!(latex(&syms), "2x^{2}+1");
     }
 
     #[test]

@@ -410,8 +410,29 @@ rather than one model's lucky string.
 splits at ~0.8 bar-widths against a 0.25 threshold, so every `=` read as `- -` before.
 Guards (width-ratio, x-overlap, bar-shape) each kill a real false positive; 3 tests.
 
-⇒ **Next: the first full-equation test.** Draw `2x + 3 = 7` on the tablet (`make record`) —
-every token in it exists now. Expect imperfection; demand correction reach.
+### 🏆 2026-07-13: `2x + 3 = 7` → `2x+3=>` — the first full equation, end to end
+
+Drawn on the tablet, one line, real handwriting. **Five of six symbols top-1** (`2` 52%,
+`x` 89%, `+` 97%, `3` 99.8%, and the collected-`=` recognized as ONE symbol); the `7`,
+drawn without a top-left hook, honestly reads `>` with the truth at rank 5 — correction
+reach, which is the product's contract. Committed as an e2e fixture.
+
+Three fixes fell out of this single capture, each pinned by tests:
+- **Slant-aware bar merge.** The `=` was written ~17° downhill; the horizontal-only bar
+  gate never fired and one bar classified as `\setminus` (which is exactly what a slanted
+  bar *is*, to an upright-trained model). Bar-ness is now measured in the stroke's own
+  frame (endpoint direction, straightness, rotated aspect).
+- **Baseline detrending.** The line drifts downhill, and center-offset script rules parsed
+  it as `2_{x_{+3…}}`, a tower of subscripts. `structure` now fits the line's own baseline
+  (least-squares through symbol centers, ≥4 symbols, |slope| < ~20°) and judges against it.
+- **Mixed-height script regions.** A tall `2` next to a short `x` on the same line put x's
+  *center* far below 2's — `2_{x}`. Scripts are now judged by the neighbour's extremities
+  against the base's midline, with the margin scaled by the *neighbour's* height (the
+  base-scaled version broke `\int_a^b`, whose limits sit close to a very tall operator).
+
+**Found, not yet handled:** the equation was written with the tablet in landscape; the
+digitizer frame is portrait, so the ink arrived rotated 90° and was counter-rotated by
+hand. Orientation detection (or a --landscape flag) is owed before real users hit it.
 
 ⇒ **`--collect` remains the path to finishing the job** — `1` vs `⌉`, `x` vs `χ` calibration,
 and the three tokens that exist nowhere (`=`, `(`, `)`). The everyday tokens need device-native
