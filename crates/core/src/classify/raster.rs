@@ -91,25 +91,63 @@ pub fn rasterize(strokes: &[Stroke], size: usize) -> Vec<f32> {
 
 /// A small vector of shape cues the classifier uses alongside the bitmap (DESIGN
 /// §4.3: "a handful of global stroke features"). Fields:
-/// `[stroke_count, aspect_ratio, arc_length, start_x, start_y, end_x, end_y]`.
-/// Aspect and arc length disambiguate size-lost symbols (e.g. `.` vs `-`); the
+/// `[stroke_count, elongation, arc_length, start_x, start_y, end_x, end_y]`.
+/// Elongation and arc length disambiguate size-lost symbols (e.g. `.` vs `-`); the
 /// structure stage later refines size-ambiguous cases (DESIGN §4.3).
+///
+/// # Every feature here is **dimensionless**. It must stay that way.
+///
+/// This is the same train/inference-skew footgun the module header warns about, and it
+/// is *easier* to trip here than in the bitmap. `rasterize` aspect-fits into its own
+/// canvas, so it cannot help but be scale-invariant. This function looks at raw
+/// coordinates, and the ink reaching it arrives in whatever units its source happens to
+/// use: Detexify's bulk dump is in **screen pixels** (a stroke spans ~300 units),
+/// detexify-next ships **0–1 normalized floats**, and `crates/rm` hands us **normalized
+/// device ink**. Emit an arc length or a start point in raw units and the model bakes
+/// the corpus's coordinate system into its weights.
+///
+/// That is not hypothetical — it is the bug this shape was written to fix. The features
+/// were previously raw (`arc`, and `sx/sy/ex/ey` straight off the point), which nobody
+/// noticed only because detexify-next's coordinates *happened* to already be normalized
+/// like the device's. Scoring that model against the same symbols in pixel coordinates
+/// gave **7.9% top-5** where it otherwise gets 90%+ — and a model trained the other way
+/// round would have failed exactly as hard on the tablet, on real ink, in the user's
+/// hands. The bitmap and online channels were fine throughout; the giveaway is that
+/// their invariance is *tested* and this vector's never was. It is now
+/// (`features_are_scale_and_translation_invariant`).
 pub fn global_features(strokes: &[Stroke]) -> [f32; NUM_FEATURES] {
     let count = strokes.iter().filter(|s| !s.points.is_empty()).count();
     let (nx, ny, mx, my) = bounds(strokes).unwrap_or((0.0, 0.0, 0.0, 0.0));
-    let aspect = (mx - nx).max(1e-6) / (my - ny).max(1e-6);
+    let (w, h) = (mx - nx, my - ny);
+
+    // The ink's own frame: translate by the bounding box origin, scale by its longest
+    // side. Uniform (not per-axis) so the aspect ratio isn't squashed out — `elong`
+    // below reports that separately.
+    let span = w.max(h);
+    let span = if span > 1e-6 { span } else { 1.0 }; // a single dot has no extent
+    let rel = |p: &crate::stroke::Point| ((p.x - nx) / span, (p.y - ny) / span);
+
     let mut arc = 0.0f32;
     for s in strokes {
-        for w in s.points.windows(2) {
-            let (dx, dy) = (w[1].x - w[0].x, w[1].y - w[0].y);
+        for p in s.points.windows(2) {
+            let (dx, dy) = (p[1].x - p[0].x, p[1].y - p[0].y);
             arc += (dx * dx + dy * dy).sqrt();
         }
     }
+
+    // Elongation in [0, 1]: 0 = a vertical sliver, 0.5 = square, 1 = a horizontal bar.
+    // Deliberately NOT the raw w/h ratio, which is unbounded — a minus sign is a few
+    // thousandths tall and would emit an aspect in the hundreds. All seven features
+    // share ONE int8 scale with the 1,384 CNN/online activations they are concatenated
+    // to (see model.rs), so a single wild feature drags that scale up and quantizes
+    // everything else to near-zero. Keep every feature O(1).
+    let elong = if w + h > 1e-6 { w / (w + h) } else { 0.5 };
+
     let first = strokes.iter().flat_map(|s| s.points.first()).next();
     let last = strokes.iter().rev().flat_map(|s| s.points.last()).next();
-    let (sx, sy) = first.map_or((0.0, 0.0), |p| (p.x, p.y));
-    let (ex, ey) = last.map_or((0.0, 0.0), |p| (p.x, p.y));
-    [count as f32, aspect, arc, sx, sy, ex, ey]
+    let (sx, sy) = first.map_or((0.0, 0.0), rel);
+    let (ex, ey) = last.map_or((0.0, 0.0), rel);
+    [count as f32, elong, arc / span, sx, sy, ex, ey]
 }
 
 fn bounds(strokes: &[Stroke]) -> Option<(f32, f32, f32, f32)> {
@@ -261,5 +299,47 @@ mod tests {
         assert_eq!(f[0], 2.0); // two strokes
         assert!(f[2] >= 1.4); // arc length ≥ 1.0 (horizontal) + 0.5 (vertical)
         assert_eq!((f[3], f[4]), (0.0, 0.0)); // start point
+    }
+
+    /// The test that wasn't here — and the bug it would have caught.
+    ///
+    /// `rasterize`'s invariance is asserted above; this vector's never was. So it drifted
+    /// into emitting raw coordinates, which only worked because the training corpus
+    /// happened to be normalized like the device. Feed the identical glyph in the bulk
+    /// dump's pixel units and the model that scores 90%+ collapses to 7.9% top-5.
+    #[test]
+    fn features_are_scale_and_translation_invariant() {
+        let shape = [(0.10, 0.20), (0.60, 0.25), (0.35, 0.70)];
+        let unit = [stroke(&shape)];
+        // The same glyph as the Detexify bulk dump ships it: hundreds of pixels, offset.
+        let as_pixels: Vec<_> = shape
+            .iter()
+            .map(|&(x, y)| (x * 480.0 + 120.0, y * 480.0 + 37.0))
+            .collect();
+        let pixels = [stroke(&as_pixels)];
+
+        let (a, b) = (global_features(&unit), global_features(&pixels));
+        for i in 0..NUM_FEATURES {
+            assert!(
+                (a[i] - b[i]).abs() < 1e-3,
+                "feature {i} carries the coordinate system ({} vs {}): a model trained on \
+                 one corpus cannot survive another — nor the device",
+                a[i],
+                b[i],
+            );
+        }
+    }
+
+    /// Every feature shares ONE int8 scale with the 1,384 CNN/online activations it is
+    /// concatenated to, so one wild value quantizes all the others to zero.
+    #[test]
+    fn features_stay_bounded_for_a_flat_stroke() {
+        // A minus sign: wide, and — bar the pen's jitter — of no height at all. The old
+        // raw `w/h` aspect reported ~800,000 here.
+        let f = global_features(&[stroke(&[(0.1, 0.5), (0.9, 0.5000001)])]);
+        assert!(
+            f.iter().all(|v| v.is_finite() && v.abs() <= 20.0),
+            "unbounded feature would wreck int8 calibration: {f:?}",
+        );
     }
 }

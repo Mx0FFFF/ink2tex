@@ -186,6 +186,7 @@ fn recognize(args: &[String]) -> Result<()> {
     use ink2tex_core::classify::{
         global_features, online_features, rasterize, Labels, Weights, ONLINE_POINTS,
     };
+    use ink2tex_core::latex::symbol_command;
 
     let model = flag(args, "--model").context("--recognize needs --model <iwt>")?;
     let ink = match flag(args, "--from") {
@@ -223,12 +224,18 @@ fn recognize(args: &[String]) -> Result<()> {
     };
     eprintln!("recognized {} strokes:", ink.strokes.len());
     for (i, p) in preds.iter().enumerate() {
-        let name = labels
-            .as_ref()
-            .and_then(|l| l.get(p.class))
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("class {}", p.class));
-        println!("  {}. {:>5.1}%  {name}", i + 1, p.prob * 100.0);
+        // What the user wants is the LaTeX, not Detexify's internal symbolId. Keep the id
+        // alongside it — it is what tells look-alike classes apart when a result surprises
+        // you (there are, for instance, two indistinguishable vertical-bar classes).
+        match labels.as_ref().and_then(|l| l.get(p.class)) {
+            Some(id) => println!(
+                "  {}. {:>5.1}%  {:<16} ({id})",
+                i + 1,
+                p.prob * 100.0,
+                symbol_command(id)
+            ),
+            None => println!("  {}. {:>5.1}%  class {}", i + 1, p.prob * 100.0, p.class),
+        }
     }
     Ok(())
 }

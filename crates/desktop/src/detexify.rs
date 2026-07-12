@@ -18,6 +18,110 @@ pub struct Sample {
     pub strokes: Vec<Stroke>,
 }
 
+/// Normalize a Detexify class key to the canonical `latex:<pkg>:<name>` symbolId.
+///
+/// Two vocabularies ship in the wild for the *same* symbols:
+///   - **detexify-next**: `latex:latex2e:xi` — already canonical, passed through.
+///   - **classic** (the Postgres bulk dump): `latex2e-OT1-_xi` — that is
+///     `<pkg>-<enc>-_<cmd>`, where `<enc>` is the TeX font encoding (OT1/OMS/T1/…) and
+///     `<cmd>` is the raw command *with its braces*: `mathcal{P}`, `sqrt{}`.
+///
+/// The canonical vocabulary spells braces out — `mathcal{P}` → `mathcal-lbrace-P-rbrace`
+/// — and an empty argument collapses the doubled dash it would otherwise leave:
+/// `sqrt{}` → `sqrt-lbrace-rbrace` (no canonical name contains `--`, so this is
+/// unambiguous). Mapping classic keys into this space is what lets the 210k-sample bulk
+/// dump and the detexify-next corpus **share one label space**, and it keeps
+/// `core::latex::symbol_command` the single place that knows how a label becomes LaTeX.
+///
+/// A key matching neither shape is returned **unchanged**. Deciding which labels are
+/// admissible is the class-space filter's job (`--prepare-detexify --classes`); the
+/// loader's job is only to speak one vocabulary wherever it can.
+pub fn normalize_class(key: &str) -> String {
+    if let Some((_, canonical)) = ALIASES.iter().find(|(k, _)| *k == key) {
+        return canonical.to_string();
+    }
+    if key.starts_with("latex:") {
+        return key.to_string(); // already canonical
+    }
+    // `<pkg>-<enc>-_<cmd>`: split the command off first, then the encoding off the rest.
+    let Some((head, cmd)) = key.split_once("-_") else {
+        return key.to_string();
+    };
+    let Some((pkg, _enc)) = head.rsplit_once('-') else {
+        return key.to_string();
+    };
+    let name = spell_braces(cmd);
+    if pkg.is_empty() || name.is_empty() {
+        return key.to_string();
+    }
+    format!("latex:{pkg}:{name}")
+}
+
+/// The ~18 symbols the two vocabularies genuinely *disagree* on, rather than merely
+/// encode differently. Two causes, both historical:
+///
+///   - **Punctuation the structural rule can't reach.** The classic key is the raw TeX
+///     token (`latex2e-OT1-_&`, `latex2e-OT1-[`), where detexify-next spells the glyph
+///     out (`ampersand`, `lbracket`). Note the `_` marks a *command*: `_&` is `\&`, but
+///     a bare `[` is the literal character — which is why some of these keys don't even
+///     carry the `-_` separator the structural rule keys off.
+///   - **A hyphen/underscore split**: the dump says `not_equiv`, next says `not-equiv`.
+///
+/// Without this table these 7,957 samples — **4% of the corpus, and every single sample
+/// of 17 classes** — are silently discarded as out-of-vocabulary. With it, every key in
+/// the bulk dump lands in the 1,123-class space (asserted below, exhaustively).
+///
+/// The two `bar:*` targets are detexify-next's own generated ids for the vertical bar:
+/// the dump distinguishes `|` (literal) from `_|` (the `\|` command), and next kept two
+/// classes for them but named neither. The 2↔2 correspondence is certain; *which* is
+/// which is not. They are look-alikes and both surface in top-5, so a swap here would
+/// cost a user nothing — but don't mistake this for a checked fact.
+const ALIASES: &[(&str, &str)] = &[
+    ("latex2e-OT1-_&", "latex:latex2e:ampersand"),
+    ("latex2e-OT1-_#", "latex:latex2e:hash"),
+    ("latex2e-OT1-[", "latex:latex2e:lbracket"),
+    ("latex2e-OT1-/", "latex:latex2e:slash"),
+    ("latex2e-OT1-_%", "latex:latex2e:percent"),
+    ("latex2e-OT1-!`", "latex:latex2e:exclamation-grave"),
+    ("latex2e-OT1-|", "latex:latex2e:bar:16socis"),
+    ("latex2e-OT1-_|", "latex:latex2e:bar:1sa4fqg"),
+    ("latex2e-OT1-_not_equiv", "latex:latex2e:not-equiv"),
+    ("latex2e-OT1-_$", "latex:latex2e:dollar"),
+    ("latex2e-OT1-__", "latex:latex2e:underscore"),
+    ("latex2e-OT1-]", "latex:latex2e:rbracket"),
+    ("latex2e-OT1-_---", "latex:latex2e:dash-dash-dash"),
+    ("latex2e-OT1-_----", "latex:latex2e:dash-dash-dash-dash"),
+    ("latex2e-OT1-_--", "latex:latex2e:dash-dash"),
+    ("latex2e-OT1-_not_approx", "latex:latex2e:not-approx"),
+    ("latex2e-OT1-_not_simeq", "latex:latex2e:not-simeq"),
+    ("latex2e-OT1-_not_sim", "latex:latex2e:not-sim"),
+];
+
+/// `mathcal{P}` → `mathcal-lbrace-P-rbrace`, `sqrt{}` → `sqrt-lbrace-rbrace`.
+fn spell_braces(cmd: &str) -> String {
+    let spelled = cmd.replace('{', "-lbrace-").replace('}', "-rbrace");
+    // Collapse the `--` an empty brace arg leaves behind, and trim the edges.
+    let mut out = String::with_capacity(spelled.len());
+    for c in spelled.chars() {
+        if c == '-' && out.ends_with('-') {
+            continue;
+        }
+        out.push(c);
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// Parse one newline-delimited-JSON record — the **streaming** entry point.
+///
+/// The classic bulk dump is ~1 GB of JSON / 210k records; holding it (and its inflated
+/// `Vec<Sample>`) in memory at once is several GB. Callers that can process a sample and
+/// drop it should pull records through here one line at a time. `parse` below stays for
+/// the whole-file shapes (the cloudant single-document export), which are small.
+pub fn parse_line(line: &str) -> Option<Sample> {
+    let rec: Value = serde_json::from_str(line.trim()).ok()?;
+    sample_from(&rec)
+}
+
 /// Parse a Detexify JSON export into labelled samples.
 pub fn parse(text: &str) -> Result<Vec<Sample>> {
     // Strip the leading `// curl …` comment lines the cloudant export carries.
@@ -67,16 +171,16 @@ fn collect(root: &Value, out: &mut Vec<Sample>) {
 /// or nested inside a `doc` (the cloudant row wrapper).
 fn sample_from(rec: &Value) -> Option<Sample> {
     let inner = rec.get("doc").unwrap_or(rec);
-    // `symbolId` (detexify-next) / `key` (cloudant export). NOT bare `id` — that's
-    // the *sample* id in both formats, not the class.
+    // `symbolId` (detexify-next) / `key` (cloudant export + the classic dump). NOT bare
+    // `id` — that's the *sample* id in both formats, not the class.
     let class = ["symbolId", "key", "symbol"]
         .iter()
         .find_map(|k| {
             rec.get(*k)
                 .or_else(|| inner.get(*k))
                 .and_then(Value::as_str)
-        })?
-        .to_string();
+        })
+        .map(normalize_class)?; // one label space, whatever the export
     let data = inner
         .get("data")
         .or_else(|| inner.get("strokes"))
@@ -106,9 +210,22 @@ fn strokes_from(data: &[Value]) -> Vec<Stroke> {
 }
 
 fn point_from(p: &Value, t0: &mut Option<i64>) -> Option<Point> {
-    let x = num(p.get("x")?)? as f32;
-    let y = num(p.get("y")?)? as f32;
-    let t = p.get("t").and_then(num).unwrap_or(0.0) as i64;
+    // Two point shapes ship in the wild: an object `{x, y, t}` (cloudant view export /
+    // detexify-next) and an array `[x, y, t]` (the classic Postgres `strokes json`
+    // column). Accept both so one loader handles every Detexify export.
+    let (x, y, t) = if let Some(a) = p.as_array() {
+        (
+            num(a.first()?)? as f32,
+            num(a.get(1)?)? as f32,
+            a.get(2).and_then(num).unwrap_or(0.0) as i64,
+        )
+    } else {
+        (
+            num(p.get("x")?)? as f32,
+            num(p.get("y")?)? as f32,
+            p.get("t").and_then(num).unwrap_or(0.0) as i64,
+        )
+    };
     let base = *t0.get_or_insert(t);
     // Detexify has no pressure/tilt; use full pressure so strokes render solid.
     Some(Point::new(
@@ -141,7 +258,7 @@ mod tests {
     fn parses_cloudant_export() {
         let s = parse(FIXTURE).unwrap();
         assert_eq!(s.len(), 1);
-        assert_eq!(s[0].class, "amssymb-OT1-_bigstar");
+        assert_eq!(s[0].class, "latex:amssymb:bigstar"); // classic key → canonical
         assert_eq!(s[0].strokes.len(), 1);
         let pts = &s[0].strokes[0].points;
         assert_eq!(pts.len(), 2);
@@ -169,6 +286,85 @@ mod tests {
         assert_eq!(s[0].class, "latex:wasysym:XBox");
         assert_eq!(s[0].strokes[0].points.len(), 2);
         assert_eq!(s[0].strokes[0].points[0].t_us, 0); // no timestamps → 0
+    }
+
+    #[test]
+    fn parses_array_form_points() {
+        // Classic Postgres `strokes json` column: each point is an `[x, y, t]` array.
+        let line = r#"{"key":"latex2e-OT1-_zeta","strokes":[[[250,103,1362942716695],[242,103,1362942716985]]]}"#;
+        let s = parse(line).unwrap();
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].class, "latex:latex2e:zeta");
+        let pts = &s[0].strokes[0].points;
+        assert_eq!(pts.len(), 2);
+        assert_eq!((pts[0].x, pts[0].y), (250.0, 103.0));
+        assert_eq!(pts[0].t_us, 0); // relative to first
+        assert_eq!(pts[1].t_us, 290_000); // (…985 − …695) ms → µs
+    }
+
+    #[test]
+    fn parse_line_streams_one_record() {
+        let s = parse_line(r#"{"key":"latex2e-OT1-_xi","strokes":[[[1,2,0],[3,4,10]]]}"#).unwrap();
+        assert_eq!(s.class, "latex:latex2e:xi");
+        assert_eq!(s.strokes[0].points.len(), 2);
+        assert!(parse_line("").is_none());
+        assert!(parse_line("{oops").is_none());
+    }
+
+    /// The classic dump and detexify-next name the same symbols differently. These are
+    /// the mappings that let them share one label space — every expectation here was
+    /// checked against the real 1,123-class vocabulary in `train/dataset/classes.txt`.
+    #[test]
+    fn classic_keys_normalize_to_symbolids() {
+        let cases = [
+            ("latex2e-OT1-_xi", "latex:latex2e:xi"),
+            ("latex2e-OT1-_sum", "latex:latex2e:sum"),
+            ("amssymb-OT1-_bigstar", "latex:amssymb:bigstar"),
+            // braces are spelled out
+            (
+                "amssymb-OT1-_mathcal{P}",
+                "latex:amssymb:mathcal-lbrace-P-rbrace",
+            ),
+            (
+                "dsfont-OT1-_mathds{R}",
+                "latex:dsfont:mathds-lbrace-R-rbrace",
+            ),
+            // …and an *empty* argument collapses the dash it would double up
+            ("latex2e-OT1-_sqrt{}", "latex:latex2e:sqrt-lbrace-rbrace"),
+            // encodings other than OT1 exist; the encoding is discarded either way
+            ("stmaryrd-OMS-_lightning", "latex:stmaryrd:lightning"),
+            // already canonical → identity
+            ("latex:wasysym:XBox", "latex:wasysym:XBox"),
+        ];
+        for (raw, want) in cases {
+            assert_eq!(normalize_class(raw), want, "normalizing {raw}");
+        }
+    }
+
+    #[test]
+    fn aliased_keys_reach_their_canonical_class() {
+        // The punctuation keys the structural rule can't reach: `_&` is the command
+        // `\&`, a bare `[` is the literal character (note: no `-_` separator at all).
+        assert_eq!(normalize_class("latex2e-OT1-_&"), "latex:latex2e:ampersand");
+        assert_eq!(normalize_class("latex2e-OT1-["), "latex:latex2e:lbracket");
+        assert_eq!(
+            normalize_class("latex2e-OT1-!`"),
+            "latex:latex2e:exclamation-grave"
+        );
+        // hyphen/underscore split between the two vocabularies
+        assert_eq!(
+            normalize_class("latex2e-OT1-_not_equiv"),
+            "latex:latex2e:not-equiv"
+        );
+    }
+
+    #[test]
+    fn unrecognized_keys_pass_through_untouched() {
+        // Not this loader's call to make — `--prepare-detexify --classes` is the filter
+        // that decides admissibility. Mangling a key here would only hide it.
+        for raw in ["latin_A", "some-OT1-garbage", ""] {
+            assert_eq!(normalize_class(raw), raw);
+        }
     }
 
     #[test]

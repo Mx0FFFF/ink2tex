@@ -47,6 +47,12 @@ fn detexify_name_to_latex(name: &str) -> String {
         if let Some(arg) = rest.strip_suffix("-rbrace") {
             return format!("\\{cmd}{{{arg}}}");
         }
+        // …and an *empty* argument, whose dash collapses: "sqrt-lbrace-rbrace" → \sqrt{}.
+        // `\sqrt{}` is a real class with over a thousand samples; without this it emitted
+        // the literal `\sqrt-lbrace-rbrace`.
+        if rest == "rbrace" {
+            return format!("\\{cmd}{{}}");
+        }
     }
     // a single latin letter or digit stays literal; anything else is a command name.
     if name.len() == 1 && name.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -75,6 +81,12 @@ mod tests {
         assert_eq!(
             symbol_command("latex:amssymb:mathcal-lbrace-R-rbrace"),
             "\\mathcal{R}"
+        );
+        // An empty brace argument collapses its dash in the class name. Miss this and a
+        // class with >1,000 samples emits the literal `\sqrt-lbrace-rbrace`.
+        assert_eq!(
+            symbol_command("latex:latex2e:sqrt-lbrace-rbrace"),
+            "\\sqrt{}"
         );
     }
 }

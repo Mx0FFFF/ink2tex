@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use ink2tex_core::classify::{
     global_features, online_features, rasterize, recognize, Labels, Weights, ONLINE_POINTS,
 };
+use ink2tex_core::latex::symbol_command;
 use ink2tex_core::Ink;
 
 fn workspace_root() -> PathBuf {
@@ -58,12 +59,14 @@ fn corpus_symbols_classify_in_top5() {
         )
         .expect("classify");
 
-        let top5: Vec<&str> = preds
+        // Compare LaTeX, not raw symbolIds — so this suite also covers the
+        // symbolId→command mapper, where `\sqrt{}` once emitted `\sqrt-lbrace-rbrace`.
+        let top5: Vec<String> = preds
             .iter()
-            .map(|p| labels.get(p.class).unwrap_or("?"))
+            .map(|p| symbol_command(labels.get(p.class).unwrap_or("?")))
             .collect();
         assert!(
-            top5.contains(&expected),
+            top5.iter().any(|t| t == expected),
             "{}: expected {expected:?} not in top-5 {top5:?}",
             file_name(&path),
         );

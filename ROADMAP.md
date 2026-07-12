@@ -7,6 +7,95 @@
 
 ## Current state
 
+**M1's accuracy gate is MET on the full corpus — and a bug that would have broken the
+model on the tablet is fixed.** The classic Detexify bulk dump turned out to be sitting
+in `~/Downloads/detexify.sql.gz` all along (this file used to say it was inaccessible):
+**210,454 samples, 5.3× the 39,554** we had been training on. It is now ingested
+end-to-end, **zero samples dropped**, and the shipped model is trained on it.
+
+**Held-out top-5, through the int8 kernel the device actually runs: 96.8% (micro),
+85.9% (macro).** The M1 done-criterion (>90% top-5) is met with room. Quantization is
+essentially free — PyTorch float scores 96.86 / 86.31 on the same rows.
+
+The gain, as a *controlled* A/B (identical held-out split, identical hyperparameters,
+only the number of training rows differs — `train.py --train-subsample`):
+
+| train rows | top-5 micro | **top-5 macro** | train top-5 |
+|---|---|---|---|
+| 39,554 (the old corpus's size) | 93.2% | 70.9% | 96.6% |
+| **189,554 (full)** | **96.9%** | **86.3%** | 97.6% |
+
+⚠️ **Macro is the number to watch, not micro.** The real corpus is heavily imbalanced
+(`\int`: 3,937 samples; median class: 53; 159 classes under ten) — that is genuine usage
+frequency, not a defect, but it means micro accuracy is dominated by the head and can
+read as excellent while the tail is unusable. The extra data bought **+15.4 points of
+macro** and only +3.6 micro: it went almost entirely into the tail, which is exactly
+where it was needed. Both `--eval` and `train.py` now report macro.
+
+⚠️ **The old "90.8%" is not comparable to these** and has been retired: it was measured
+on a different (class-balanced) val set, and with the broken features below.
+
+**Now capacity-bound, not data-bound.** The train/val gap collapsed from 3.4 points to
+**0.7** (97.6 vs 96.9). More data will not move this much further; **model capacity is
+the next accuracy lever** — `fc1` is 64 units feeding a 1,123-way softmax, which is a
+tight bottleneck. There is inference budget for it (~18 ms/symbol against a 50 ms
+criterion).
+
+### 🐛 The bug: `global_features` was not scale-invariant (would have broken on-device)
+
+Five of the seven global features were emitted in **raw coordinate units** — arc length,
+and the start/end points straight off the stroke. The bitmap channel is invariant for
+free (it aspect-fits) and the online channel is invariant *and tested*; this vector was
+neither, and nobody had tested it.
+
+It only ever worked because detexify-next's coordinates *happened* to be normalized like
+the device's. The bulk dump ships **raw pixels**, so: scoring the old model on the same
+symbols in pixel units gave **7.9% top-5** instead of ~90% — and a model trained on the
+dump would have failed exactly as hard **on the tablet, on real ink, in the user's
+hands**. (Corroborating detail: the unbounded `w/h` aspect term hit ~8e5 on a minus sign,
+and all seven features share one int8 scale with the 1,384 CNN/online activations they
+are concatenated to — epoch-0 loss was 125 where `ln(1123) ≈ 7`.)
+
+Features are now dimensionless (relative to the ink's own bbox) and bounded, with the
+invariance test that was missing. The invariant is written down in
+`.claude/rules/core-purity.md` — **if you add a feature, add its invariance test in the
+same commit.** This also silently fixes M2/M3: `line.rs` computes features per *segmented
+symbol*, so `sx/sy` used to encode a symbol's absolute position in the expression.
+
+### The two corpora are the same drawings — do not merge them naively
+
+detexify-next is a class-**balanced subsample** of the classic dump: **97.4% of its rows
+have a shape-twin in the dump, yet zero match byte-for-byte** (normalized floats vs raw
+pixels, so de-duplication does not catch them). Merging and splitting at random puts the
+same drawing in train *and* val and silently inflates the held-out number — the very
+metric this milestone gates on. `train.py` now splits by **shape group**, which makes
+that impossible and costs no data. Details in `train/README.md`.
+
+### Also this session
+
+- **Ingest:** `train/detexify_sql_to_ndjson.py` (streams the `pg_dump` COPY block) →
+  `--prepare-detexify`, which now **streams** (`-` = stdin, so a 1 GB dump never lands on
+  disk) and takes `--classes` to **pin the label space**. Pinning makes datasets
+  concatenable and keeps `model.labels.txt` stable — the new model's labels are
+  byte-identical to the old one's, so it is a drop-in swap for anything deployed.
+- Classic keys (`latex2e-OT1-_xi`) are normalized to canonical symbolIds
+  (`latex:latex2e:xi`) in `detexify::normalize_class`, plus an 18-entry alias table for
+  the punctuation the old key format can't express (`_&` → `ampersand`, `[` →
+  `lbracket`). Result: **0 of 210,454 samples dropped.**
+- **`\sqrt{}` emitted the literal `\sqrt-lbrace-rbrace`** — an empty brace argument
+  collapses its dash, which the symbolId→LaTeX mapper didn't handle. A class with >1,000
+  samples. Fixed + tested.
+- **`--recognize` printed internal symbolIds, not LaTeX** — on both desktop and the
+  device, whose docstring already claimed otherwise. It now prints `\sum  (latex:latex2e:sum)`.
+- **Corpus regression suite: 1 → 13 cases.** One test case was guarding the entire
+  classifier. `--export-corpus` mints fixtures from real Detexify handwriting; and
+  `.expected.tex` now holds actual LaTeX (it held a raw symbolId), so the suite covers
+  the symbolId→command mapper too — where `\sqrt{}` was broken.
+- `make dataset` / `make train` / `make eval` now exist; the pipeline was only in a shell
+  history before.
+
+---
+
 **M3 (2-D structure) built — the recognizer now emits real math, not just a list of
 symbols.** `core::structure` turns positioned symbols into a Symbol Layout Tree via
 geometry + class rules — baseline + super/subscripts, fractions (nested,
@@ -23,30 +112,42 @@ CROHME exact-match number (needs the full-data model + more segmentation work).
 
 **M1 recognizer works end-to-end on real data.** The full stack — Detexify strokes
 → rasterize → PyTorch train → int8 quantize → Rust int8 forward pass → labelled
-top-5 — is built and validated: trained on **39,554 real samples / 1,123 classes**
-(from `detexify-next`, since the classic Drive dump 401s), **90.8% held-out top-5**,
-reproducibly (training is now seeded + best-on-validation checkpointed). Accuracy
-climbed 86.5% → 89.5% (affine augmentation + dropout) → **90.8% by adding the online
-channel** (DESIGN §3b) — the free temporal signal a small 1-D conv reads off the
-resampled `[dx, dy, pen_up, curvature]` pen trajectory (`core::classify::online`),
-fused with the bitmap CNN at the fc1 layer; the full 342k Drive set stays inaccessible,
-so these are the accuracy levers.
+top-5 — is built and validated (see "Current state" above for the numbers, now on the
+full 210k corpus). Training is seeded + best-on-validation checkpointed, so a given
+dataset reproduces its model. The architecture's accuracy levers, in the order they
+landed: affine augmentation + dropout, then the **online channel** (DESIGN §3b) — the
+free temporal signal a small 1-D conv reads off the resampled
+`[dx, dy, pen_up, curvature]` pen trajectory (`core::classify::online`), fused with the
+bitmap CNN at the fc1 layer — then the full corpus. *Next lever is capacity, not data.*
 The exported `train/model.iwt` runs through the hand-rolled int8 kernel in Rust
 (`--eval`) with the quantization intact. **And it runs ON THE DEVICE**: `crates/rm
 --recognize` (`make recognize`) rasterizes captured ink → int8 CNN → top-5 LaTeX on
 stdout (streamed over SSH, so **no rm2fb needed**), and the armv7 Cortex-A7 produced
 the **bit-identical** top-5 to x86 — the quantized math is arch-consistent, at
 **~18 ms/symbol** (M1's `<50 ms` inference criterion, met). A **live draw-to-recognize**
-on the tablet worked end-to-end. The repo is now **committed** (`f047779`, branch
-`main`) and the `tests/corpus` regression suite is seeded (xi, with the reference model
-committed so CI runs it). Remaining
-to ship M1: the live-pen loop is the same code (draw instead of `--from`; verified by
-composition — capture ✅ + recognize ✅); the online channel (§3b) is now in, so more
-accuracy would need the full 342k Drive set (inaccessible — needs a manual browser
-download); on-screen result display (needs the M4 typesetter); package for Toltec/Vellum.
+on the tablet worked end-to-end. ⚠️ That device run predates the `global_features` fix
+and the retrained model — the code path is unchanged, but **re-verify it on hardware**
+(`make deploy-model && make recognize`) before calling M1 shipped.
+Remaining to ship M1: deploy + re-verify on device (above); on-screen result display
+(needs the M4 typesetter); package for Toltec/Vellum.
 The one lingering **M0** item is rm2fb for on-screen *inking* (recognition doesn't need it).
 
-- **Last session:** 2026-07-11 — full M0 build. Workspace (core/desktop/rm), Makefile,
+- **Last session:** 2026-07-12 — the full 210k Detexify corpus (see "Current state"), the
+  `global_features` scale-invariance bug, the shape-group split, and the corpus suite
+  1 → 13. The shipped model is retrained; `train/model.iwt` is the full-corpus one and its
+  labels are byte-identical to the previous file.
+- **Next task:** **deploy + re-verify on hardware** — `make deploy-model && make recognize`,
+  draw a symbol, confirm the top-5 is sane. The features and the model both changed this
+  session; the on-device run in the M1 notes predates both. That is the last thing between
+  here and *shipping M1* (then: package for Toltec/Vellum). After that, the next accuracy
+  lever is **model capacity, not data** — `fc1` is 64 units into a 1,123-way softmax and the
+  train/val gap is down to 0.7 points, with inference budget to spare (~18 ms of 50 ms).
+- **Blocked on:** nothing. (The device is at `10.11.99.1` over USB; on-screen `--ink` still
+  needs rm2fb installed, but recognition does not.)
+
+<details><summary>Earlier sessions</summary>
+
+- **2026-07-11** — full M0 build. Workspace (core/desktop/rm), Makefile,
   GitHub CI, `deny.toml` ML-runtime ban + core-purity check (both proven to *fail* on a
   real violation). `crates/core`: `Point`/`Stroke`/`Ink` + hand-rolled little-endian
   `.ink` format (8 tests). `crates/desktop`: headless replay renderer (`--replay`,
@@ -57,13 +158,10 @@ The one lingering **M0** item is rm2fb for on-screen *inking* (recognition doesn
   **Verified on the device end-to-end:** `--probe` read the real ranges, and a
   `--record` session captured a hand-drawn 'R' (12 strokes / 2745 points) that renders
   **upright and correctly oriented** → the transform is right, no flip needed.
-- **Next task:** to get live ink on the *screen*, install rm2fb on the device (Toltec
+- **M0 loose end:** to get live ink on the *screen*, install rm2fb on the device (Toltec
   `display` pkg), then `make ink` and draw — confirm ink appears under the pen and
   measure perceived latency (DEVICE FACTS row 7; ⚠ back up the device first, it stops
-  xochitl). Then add the first real `tests/corpus/*.ink` fixtures. That closes M0 →
-  start **M1** (offline Detexify single-symbol classifier — the "ship this" milestone).
-- **Blocked on:** nothing code-side. On-screen `--ink` needs rm2fb installed on the
-  device; capture (`--record`) already works without it.
+  xochitl).
 - **Device facts verified:** rows 1,2,3,5 ✅; row 3 orientation ✅; row 4 ✅ (rm2fb NOT
   installed → needed for `--ink`); row 6 ✅ (no `usb_f_hid`); row 7 (latency) pending the
   on-screen `--ink` run. See `.claude/rules/device.md`.
@@ -94,6 +192,8 @@ The one lingering **M0** item is rm2fb for on-screen *inking* (recognition doesn
   device, and package for Toltec/Vellum. Done = >90% top-5 → **ship the single-symbol
   tool** (the milestone that gets real users and breaks the "abandoned sample" curse).
 
+</details>
+
 ---
 
 ## Milestones
@@ -114,6 +214,11 @@ Train a symbol classifier on Detexify's ODbL stroke data. Hand-rolled int8 CNN i
 
 **Done when:** >90% top-5 accuracy on a held-out split, <50 ms inference on-device.
 **Then package it for Toltec/Vellum and release it.**
+
+> ✅ **Accuracy: met** — 96.8% top-5 (85.9% macro) through the int8 kernel, on a
+> shape-group-held-out split of the full 210k corpus. ✅ **Latency: met** — ~18 ms/symbol
+> on the armv7 Cortex-A7. Remaining: re-verify on hardware after this session's model +
+> feature change, then package.
 
 This is not a toy milestone. An offline symbol-lookup tool on e-ink doesn't exist and people want it. **Real users from month one is what breaks the "unmaintained experimental sample" curse** that killed every prior attempt at this. Ship before you're ready.
 

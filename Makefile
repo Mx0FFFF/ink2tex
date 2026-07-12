@@ -8,8 +8,15 @@ FILE      ?=
 MODEL     ?= train/model.iwt
 LABELS    ?= train/model.labels.txt
 
+DUMP      ?= $(HOME)/Downloads/detexify.sql.gz
+NDJSON    := train/detexify_raw/detexify.ndjson
+DATASET   ?= train/dataset_full
+VALSET    ?= train/dataset_val
+EPOCHS    ?= 60
+
 .PHONY: test replay harness build-rm deploy probe record run ink recognize \
-        deploy-model screenshot check-bans core-purity device-facts fmt clippy ci
+        deploy-model screenshot check-bans core-purity device-facts fmt clippy ci \
+        dataset train eval
 
 # --- your feedback loops -----------------------------------------------------
 
@@ -27,6 +34,31 @@ replay:
 # Interactive desktop harness (needs a display). Stub until built out.
 harness:
 	cargo run -p ink2tex-desktop -- --harness
+
+# --- training (offline, host-only; see train/README.md) ----------------------
+
+# The Detexify bulk pg_dump → NDJSON → a dataset rasterized through core's OWN
+# rasterizer (that is what keeps training and on-device inference pixel-identical).
+# --classes pins the label space, so datasets stay concatenable and labels stable.
+$(NDJSON): $(DUMP)
+	@mkdir -p $(dir $@)
+	python3 train/detexify_sql_to_ndjson.py $(DUMP) -o $@
+
+$(DATASET)/meta.json: $(NDJSON) train/dataset/classes.txt
+	cargo run -q --release -p ink2tex-desktop -- --prepare-detexify $(NDJSON) \
+	  --out-dir $(DATASET) --classes train/dataset/classes.txt
+
+dataset: $(DATASET)/meta.json
+
+# Train, quantize to int8, export model.iwt + labels, and keep the held-out split.
+train: dataset
+	python3 train/train.py --data $(DATASET) --epochs $(EPOCHS) --out $(MODEL) \
+	  --dump-val $(VALSET)
+
+# Score a model on the held-out split through the *int8* kernel — i.e. the number the
+# device will actually produce, not the float one PyTorch reports. MODEL= to compare.
+eval:
+	cargo run -q --release -p ink2tex-desktop -- --eval $(VALSET) --model $(MODEL)
 
 # --- device -----------------------------------------------------------------
 

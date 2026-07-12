@@ -41,7 +41,7 @@ ONLINE_CH, ONLINE_LEN = 4, 64
 ONLINE_OC, ONLINE_KW, ONLINE_STRIDE = 12, 5, 2
 
 
-def load_dataset(d, max_samples=0):
+def load_one(d):
     meta = json.load(open(os.path.join(d, "meta.json")))
     n, size, nf = meta["n"], meta["size"], meta["num_features"]
     X = np.fromfile(os.path.join(d, "images.u8"), np.uint8).reshape(n, 1, size, size)
@@ -52,11 +52,52 @@ def load_dataset(d, max_samples=0):
     O = None
     if meta.get("online_len"):
         O = np.fromfile(os.path.join(d, "online.f32"), "<f4").reshape(n, ONLINE_CH, ONLINE_LEN)
-    if max_samples and n > max_samples:
-        sel = np.random.default_rng(0).permutation(n)[:max_samples]
+    return X, O, F, y, classes, size, nf
+
+
+def load_dataset(dirs, max_samples=0):
+    """Load one or more dataset dirs and concatenate them.
+
+    Concatenating is only meaningful because `--prepare-detexify --classes` pins the
+    label space: every dir indexes the *same* class list, so label ids line up. Loading
+    dirs prepared against different vocabularies would silently mislabel everything, so
+    that is checked, not assumed.
+    """
+    parts = [load_one(d) for d in dirs]
+    classes, size, nf = parts[0][4], parts[0][5], parts[0][6]
+    for d, p in zip(dirs[1:], parts[1:]):
+        if p[4] != classes or p[5] != size or p[6] != nf:
+            sys.exit(f"error: {d} was prepared against a different label space/geometry — "
+                     f"re-run --prepare-detexify --classes with the same class list")
+    X = np.concatenate([p[0] for p in parts])
+    F = np.concatenate([p[2] for p in parts])
+    y = np.concatenate([p[3] for p in parts])
+    O = None if any(p[1] is None for p in parts) else np.concatenate([p[1] for p in parts])
+    if len(dirs) > 1:
+        print("  " + " + ".join(f"{len(p[3])} from {d}" for d, p in zip(dirs, parts)), flush=True)
+    if max_samples and len(y) > max_samples:
+        sel = np.random.default_rng(0).permutation(len(y))[:max_samples]
         X, F, y = X[sel], F[sel], y[sel]
         O = O[sel] if O is not None else None
     return X, O, F, y, classes, size, nf
+
+
+def shape_groups(X, y):
+    """Group id per row: (binarized bitmap, label). Rows that look identical to the
+    model — the same drawing — share a group.
+
+    The bulk corpus contains the same drawing more than once: people resubmit, and the
+    detexify-next corpus turned out to be a re-encoding of the very same drawings (97.4%
+    of it has a shape-twin in the Postgres dump, yet *zero* rows match byte-for-byte,
+    because one ships normalized floats and the other raw pixels). A plain random row
+    split scatters those twins across train and val, and the held-out score — the M1
+    gate — inflates for free. Splitting whole groups makes that impossible, and unlike
+    de-duplication it throws no data away.
+    """
+    packed = np.packbits(X.reshape(len(y), -1) > 0, axis=1)          # 1 bit/pixel
+    key = np.concatenate([packed, y.astype("<u4").view(np.uint8).reshape(-1, 4)], axis=1)
+    _, gid = np.unique(key, axis=0, return_inverse=True)
+    return gid.ravel()
 
 
 def build_model(nf, n_classes, size):
@@ -76,7 +117,7 @@ def build_model(nf, n_classes, size):
             self.o1 = nn.Conv1d(ONLINE_CH, ONLINE_OC, ONLINE_KW, stride=ONLINE_STRIDE)
             self.f1 = nn.Linear(flat + online_flat + nf, FC1)
             self.f2 = nn.Linear(FC1, n_classes)
-            self.drop = nn.Dropout(0.3) # regularize: 35 samples/class is little data
+            self.drop = nn.Dropout(0.3) # the long tail is still thin: 159 classes have <10 samples
 
         def forward(self, x, online, feats):
             x = self.pool(torch.relu(self.c1(x)))
@@ -92,10 +133,11 @@ def build_model(nf, n_classes, size):
 
 def augment(x):
     """Random affine (rotation, scale, translation) on a batch of 1×H×W bitmaps —
-    cheap synthetic variety that effectively multiplies our limited data and makes the
-    classifier robust to how a symbol is drawn. Train-time ONLY (inference sees the
-    clean rasterization). This is the main accuracy lever when more data isn't
-    available (the full 342k Detexify Drive dump is inaccessible)."""
+    cheap synthetic variety that makes the classifier robust to how a symbol is drawn —
+    the same glyph rotated, bigger, off-centre. Train-time ONLY (inference sees the clean
+    rasterization). It was worth +3 points top-5 back when the corpus was a 39.5k
+    subsample; it still earns its keep on the tail classes, which have a handful of
+    samples each no matter how big the corpus gets."""
     import torch
 
     b = x.shape[0]
@@ -113,7 +155,7 @@ def augment(x):
 
 def _batch(X, O, F, y, idx):
     """Materialize one mini-batch as tensors (uint8 → float32/255 on the fly, so the
-    full 342k×32×32 set never lives in memory as float)."""
+    full 210k×32×32 corpus never lives in memory as float)."""
     import torch
 
     xb = torch.from_numpy(X[idx].astype(np.float32) / 255.0)
@@ -127,33 +169,64 @@ def _batch(X, O, F, y, idx):
     return xb, ob, fb, yb
 
 
-def evaluate(model, X, O, F, y, idx, bs):
+def evaluate(model, X, O, F, y, idx, bs, n_classes=0):
+    """Top-5 (micro), and — if asked — the *macro* average over classes.
+
+    The raw corpus is wildly imbalanced: `\\int` has 3,937 samples, the median class 53,
+    and 159 classes fewer than ten. Micro accuracy is dominated by the head, so it can
+    look excellent while the tail is unusable. Macro (mean per-class recall) is the
+    number that notices. Report both; trust neither alone.
+    """
     import torch
 
     model.eval()
-    correct = 0
+    hit = np.zeros(len(idx), bool)
     with torch.no_grad():
         for i in range(0, len(idx), bs):
             xb, ob, fb, yb = _batch(X, O, F, y, idx[i : i + bs])
             logits = model(xb, ob, fb)
             k = min(5, logits.shape[1])
             top5 = logits.topk(k, dim=1).indices
-            correct += (top5 == yb[:, None]).any(1).sum().item()
-    return correct / max(1, len(idx))
+            hit[i : i + len(yb)] = (top5 == yb[:, None]).any(1).numpy()
+    micro = hit.mean() if len(idx) else float("nan")
+    if not n_classes:
+        return micro
+    yv = y[idx]
+    per = [hit[yv == c].mean() for c in range(n_classes) if (yv == c).any()]
+    return micro, float(np.mean(per)), len(per)
 
 
-def train(model, X, O, F, y, epochs, lr, val_frac, bs):
+def split_by_group(gid, val_frac, seed=0):
+    """Hold out whole shape-groups (see `shape_groups`), never individual rows."""
+    groups = np.unique(gid)
+    rng = np.random.default_rng(seed)
+    rng.shuffle(groups)
+    n_val = max(1, int(len(groups) * val_frac))
+    is_val = np.isin(gid, groups[:n_val])
+    return np.where(~is_val)[0], np.where(is_val)[0]
+
+
+def train(model, X, O, F, y, gid, epochs, lr, val_frac, bs, n_classes, subsample=0):
     import torch
 
-    n = len(y)
-    idx = np.arange(n)
-    rng = np.random.default_rng(0)
-    rng.shuffle(idx)
-    cut = max(1, int(n * (1 - val_frac)))
-    tr, va = idx[:cut].copy(), idx[cut:].copy()
+    tr, va = split_by_group(gid, val_frac)
+    dupes = len(y) - len(np.unique(gid))
+    print(
+        f"split by shape-group: {len(tr)} train / {len(va)} val "
+        f"({len(np.unique(gid))} groups, {dupes} rows share a group with another)",
+        flush=True,
+    )
+    if subsample and subsample < len(tr):
+        # Shrink the TRAIN side only, and only *after* the split, so a small-data run and
+        # a full-data run are scored on the identical held-out rows. Subsampling before
+        # the split would move the val set too, and "more data helped" would be
+        # indistinguishable from "the val set got easier".
+        tr = np.random.default_rng(1).permutation(tr)[:subsample]
+        print(f"train subsampled to {len(tr)} rows (val untouched — controlled A/B)", flush=True)
 
     import copy
 
+    rng = np.random.default_rng(0)
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     loss_fn = torch.nn.CrossEntropyLoss()
     best_val, best_state = -1.0, None
@@ -176,8 +249,14 @@ def train(model, X, O, F, y, epochs, lr, val_frac, bs):
         print(f"epoch {ep:3d}  loss {total / max(1, len(tr)):.4f}  val top-5 {acc:.3f}", flush=True)
     if best_state is not None:
         model.load_state_dict(best_state)
-        print(f"restored best epoch (val top-5 {best_val:.3f})", flush=True)
-    return model
+    micro, macro, seen = evaluate(model, X, O, F, y, va, bs, n_classes)
+    tr_micro = evaluate(model, X, O, F, y, tr[: len(va)], bs)  # same size, for the gap
+    print(
+        f"\nbest epoch — val top-5 {micro:.4f} (micro) | {macro:.4f} (macro, over the "
+        f"{seen} classes present in val) | train top-5 {tr_micro:.4f}",
+        flush=True,
+    )
+    return model, va
 
 
 # --- symmetric int8 post-training quantization -------------------------------
@@ -241,15 +320,42 @@ def export(model, classes, out_path, s_in):
     print(f"wrote {out_path} ({len(w.to_bytes())} bytes) + labels for {len(classes)} classes")
 
 
+def dump_val(d, X, O, F, y, classes, va, size, nf):
+    """Write the held-out split as a dataset dir, so the Rust int8 evaluator
+    (`ink2tex-desktop --eval`) can score *any* model on exactly these rows. That is what
+    makes an old-vs-new comparison a controlled experiment rather than two numbers
+    measured on two different val sets."""
+    os.makedirs(d, exist_ok=True)
+    X[va].astype(np.uint8).tofile(os.path.join(d, "images.u8"))
+    F[va].astype("<f4").tofile(os.path.join(d, "features.f32"))
+    y[va].astype("<u4").tofile(os.path.join(d, "labels.u32"))
+    if O is not None:
+        O[va].astype("<f4").tofile(os.path.join(d, "online.f32"))
+    with open(os.path.join(d, "classes.txt"), "w") as f:
+        f.write("\n".join(classes) + "\n")
+    with open(os.path.join(d, "meta.json"), "w") as f:
+        json.dump({"n": len(va), "size": size, "num_features": nf,
+                   "num_classes": len(classes),
+                   "online_len": ONLINE_CH * ONLINE_LEN if O is not None else 0}, f)
+    print(f"wrote the {len(va)}-row held-out split to {d}/ (for --eval)", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", required=True, help="dataset dir from --prepare-detexify")
+    ap.add_argument("--data", required=True, nargs="+",
+                    help="dataset dir(s) from --prepare-detexify; several are concatenated "
+                         "(they must share a pinned --classes label space)")
     ap.add_argument("--out", default="train/model.iwt")
     ap.add_argument("--epochs", type=int, default=60)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--val-frac", type=float, default=0.1)
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--max-samples", type=int, default=0, help="0 = use all")
+    ap.add_argument("--train-subsample", type=int, default=0, metavar="N",
+                    help="train on only N rows of the train split (val untouched). Use this "
+                         "to measure what more DATA buys, holding everything else fixed.")
+    ap.add_argument("--dump-val", metavar="DIR",
+                    help="write the held-out split here as a dataset dir, for --eval")
     args = ap.parse_args()
 
     import torch
@@ -264,8 +370,12 @@ def main():
         f"{len(y)} samples, {len(classes)} classes, {size}×{size} bitmaps, {nf} features, {chan}",
         flush=True,
     )
+    gid = shape_groups(X, y)
     model = build_model(nf, len(classes), size)
-    train(model, X, O, F, y, args.epochs, args.lr, args.val_frac, args.batch_size)
+    model, va = train(model, X, O, F, y, gid, args.epochs, args.lr, args.val_frac,
+                      args.batch_size, len(classes), args.train_subsample)
+    if args.dump_val:
+        dump_val(args.dump_val, X, O, F, y, classes, va, size, nf)
     s_in = calibrate_input_scales(model, X, O, F)
     export(model, classes, args.out, s_in)
 

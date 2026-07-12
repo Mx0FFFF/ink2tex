@@ -14,7 +14,9 @@ mod detexify;
 mod render;
 mod synth;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -51,12 +53,24 @@ struct Cli {
 
     /// Preprocess a Detexify JSON export into a training dataset directory. Rasterizes
     /// through the SAME core rasterizer inference uses, so there is no train/infer skew.
+    /// Streams NDJSON (`-` = stdin), so a 1 GB bulk dump costs one sample of memory.
     #[arg(long, value_name = "DETEXIFY_JSON")]
     prepare_detexify: Option<PathBuf>,
 
     /// Output directory for --prepare-detexify.
     #[arg(long, value_name = "DIR")]
     out_dir: Option<PathBuf>,
+
+    /// Pin --prepare-detexify's label space to this class list (one symbolId per line;
+    /// index = line order). Samples outside it are dropped. Datasets prepared with the
+    /// same list share label ids and can simply be concatenated.
+    #[arg(long, value_name = "TXT")]
+    classes: Option<PathBuf>,
+
+    /// Mint `tests/corpus` cases from a Detexify export: one `<class>.ink` +
+    /// `<class>.expected.tex` per class listed in --classes. Needs --out-dir.
+    #[arg(long, value_name = "DETEXIFY_JSON")]
+    export_corpus: Option<PathBuf>,
 
     /// Parse an `.iwt` weights blob and print its tensors (verifies the trainer's
     /// output against core's parser).
@@ -111,7 +125,17 @@ fn main() -> Result<()> {
         let out = cli
             .out_dir
             .context("--prepare-detexify needs --out-dir <dir>")?;
-        return prepare_detexify(&input, &out, 32);
+        return prepare_detexify(&input, &out, 32, cli.classes.as_deref());
+    }
+
+    if let Some(input) = cli.export_corpus {
+        let out = cli
+            .out_dir
+            .context("--export-corpus needs --out-dir <dir>")?;
+        let want = cli
+            .classes
+            .context("--export-corpus needs --classes <txt>")?;
+        return export_corpus(&input, &out, &want);
     }
 
     if let Some(path) = cli.dump_weights {
@@ -140,12 +164,17 @@ fn main() -> Result<()> {
         };
         println!("top {} for {}:", preds.len(), ink_path.display());
         for (i, p) in preds.iter().enumerate() {
-            let name = labels
-                .as_ref()
-                .and_then(|l| l.get(p.class))
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("class {}", p.class));
-            println!("  {}. {:>5.1}%  {}", i + 1, p.prob * 100.0, name);
+            // LaTeX first — that's the product. The symbolId stays visible because it is
+            // what disambiguates look-alike classes when a prediction surprises you.
+            match labels.as_ref().and_then(|l| l.get(p.class)) {
+                Some(id) => println!(
+                    "  {}. {:>5.1}%  {:<16} ({id})",
+                    i + 1,
+                    p.prob * 100.0,
+                    ink2tex_core::latex::symbol_command(id)
+                ),
+                None => println!("  {}. {:>5.1}%  class {}", i + 1, p.prob * 100.0, p.class),
+            }
         }
         return Ok(());
     }
@@ -258,18 +287,72 @@ fn print_ascii(img: &[f32], size: usize) {
     }
 }
 
-/// Detexify JSON → a flat training dataset: `images.u8` (N×size²), `features.f32`
-/// (N×NUM_FEATURES), `labels.u32` (N), `classes.txt` (index→class), `meta.json`.
-/// numpy reads these directly (`np.fromfile`). Rasterizing here — not in Python —
-/// is what keeps training and on-device inference pixel-identical.
-fn prepare_detexify(input: &Path, out_dir: &Path, size: usize) -> Result<()> {
-    let text =
-        std::fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
-    let samples = detexify::parse(&text)?;
+/// Open a training input: a path, or `-` for stdin (so the SQL→NDJSON converter can
+/// pipe a 1 GB dump straight in without ever landing it on disk).
+fn open_input(path: &Path) -> Result<Box<dyn BufRead>> {
+    if path.as_os_str() == "-" {
+        Ok(Box::new(BufReader::new(std::io::stdin())))
+    } else {
+        let f = File::open(path).with_context(|| format!("reading {}", path.display()))?;
+        Ok(Box::new(BufReader::new(f)))
+    }
+}
 
-    let mut classes: Vec<String> = samples.iter().map(|s| s.class.clone()).collect();
-    classes.sort();
-    classes.dedup();
+/// Detexify JSON → a flat training dataset: `images.u8` (N×size²), `features.f32`
+/// (N×NUM_FEATURES), `online.f32`, `labels.u32` (N), `classes.txt` (index→class),
+/// `meta.json`. numpy reads these directly (`np.fromfile`). Rasterizing here — not in
+/// Python — is what keeps training and on-device inference pixel-identical.
+///
+/// **Streams.** The classic bulk dump is ~1 GB of JSON / 210k records; parsing it into
+/// one `Vec<Sample>` would cost several GB of inflated structs. Records are pulled a
+/// line at a time and written straight through, so peak memory is *one sample* rather
+/// than the corpus. A non-NDJSON input (the small cloudant single-document export)
+/// falls back to the whole-file parser.
+///
+/// `class_space` pins the label vocabulary: the index becomes that file's line order and
+/// samples outside it are dropped. That is what makes two datasets **concatenable** —
+/// the bulk dump and the detexify-next corpus land on identical label ids — and it keeps
+/// `model.labels.txt` stable across retrains. Without it the vocabulary is derived from
+/// the data (sorted), which needs a second pass and therefore a seekable input.
+fn prepare_detexify(
+    input: &Path,
+    out_dir: &Path,
+    size: usize,
+    class_space: Option<&Path>,
+) -> Result<()> {
+    let classes: Vec<String> = match class_space {
+        Some(p) => {
+            let text =
+                std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
+            let v: Vec<String> = text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect();
+            if v.is_empty() {
+                bail!("--classes {} is empty", p.display());
+            }
+            eprintln!(
+                "label space pinned to {} classes from {}",
+                v.len(),
+                p.display()
+            );
+            v
+        }
+        None => {
+            if input.as_os_str() == "-" {
+                bail!("reading from stdin needs --classes <txt> (deriving the vocabulary needs a second pass over the input)");
+            }
+            // Pass 1: learn the vocabulary. Sorted + deduped, as before.
+            let mut set = BTreeSet::new();
+            for_each_sample(input, |s| {
+                set.insert(s.class.clone());
+                Ok(())
+            })?;
+            set.into_iter().collect()
+        }
+    };
     let index: HashMap<&str, u32> = classes
         .iter()
         .enumerate()
@@ -277,43 +360,188 @@ fn prepare_detexify(input: &Path, out_dir: &Path, size: usize) -> Result<()> {
         .collect();
 
     std::fs::create_dir_all(out_dir)?;
-    let (mut images, mut feats, mut labels) = (Vec::new(), Vec::new(), Vec::new());
-    let mut online = Vec::new();
-    for s in &samples {
+    let mut images = BufWriter::new(File::create(out_dir.join("images.u8"))?);
+    let mut feats = BufWriter::new(File::create(out_dir.join("features.f32"))?);
+    let mut online = BufWriter::new(File::create(out_dir.join("online.f32"))?);
+    let mut labels = BufWriter::new(File::create(out_dir.join("labels.u32"))?);
+
+    // Pass 2: rasterize and write through. `seen` counts per-class so we can report the
+    // shape of the corpus — a class the data never covers still occupies a logit.
+    let mut seen = vec![0u32; classes.len()];
+    let (mut n, mut dropped) = (0usize, 0usize);
+    for_each_sample(input, |s| {
+        let Some(&id) = index.get(s.class.as_str()) else {
+            dropped += 1; // out of vocabulary — the class-space filter at work
+            return Ok(());
+        };
         for v in rasterize(&s.strokes, size) {
-            images.push((v.clamp(0.0, 1.0) * 255.0).round() as u8);
+            images.write_all(&[(v.clamp(0.0, 1.0) * 255.0).round() as u8])?;
         }
         for f in global_features(&s.strokes) {
-            feats.extend_from_slice(&f.to_le_bytes());
+            feats.write_all(&f.to_le_bytes())?;
         }
         for v in online_features(&s.strokes, ONLINE_POINTS) {
-            online.extend_from_slice(&v.to_le_bytes());
+            online.write_all(&v.to_le_bytes())?;
         }
-        labels.extend_from_slice(&index[s.class.as_str()].to_le_bytes());
+        labels.write_all(&id.to_le_bytes())?;
+        seen[id as usize] += 1;
+        n += 1;
+        if n % 25_000 == 0 {
+            eprintln!("  … {n} samples");
+        }
+        Ok(())
+    })?;
+    for w in [&mut images, &mut feats, &mut online, &mut labels] {
+        w.flush()?;
     }
 
-    std::fs::write(out_dir.join("images.u8"), &images)?;
-    std::fs::write(out_dir.join("features.f32"), &feats)?;
-    std::fs::write(out_dir.join("online.f32"), &online)?;
-    std::fs::write(out_dir.join("labels.u32"), &labels)?;
     std::fs::write(out_dir.join("classes.txt"), classes.join("\n") + "\n")?;
     std::fs::write(
         out_dir.join("meta.json"),
         format!(
             "{{\"n\": {}, \"size\": {}, \"num_features\": {}, \"num_classes\": {}, \"online_len\": {}}}\n",
-            samples.len(),
+            n,
             size,
             NUM_FEATURES,
             classes.len(),
             ONLINE_CHANNELS * ONLINE_POINTS
         ),
     )?;
+
+    let empty = seen.iter().filter(|&&c| c == 0).count();
     eprintln!(
-        "prepared {} samples / {} classes → {}/ (images.u8, features.f32, online.f32, labels.u32, classes.txt, meta.json)",
-        samples.len(),
+        "prepared {n} samples / {} classes → {}/ (images.u8, features.f32, online.f32, labels.u32, classes.txt, meta.json)",
         classes.len(),
         out_dir.display()
     );
+    if dropped > 0 || empty > 0 {
+        eprintln!(
+            "  dropped {dropped} out-of-vocabulary samples; {empty} classes have no samples here"
+        );
+    }
+    Ok(())
+}
+
+/// Mint `tests/corpus` fixtures from a Detexify export — one case per class in `want`.
+///
+/// The corpus suite is the project's immune system (CLAUDE.md §4), and it was guarding
+/// the entire classifier with a *single* case. Detexify is real human handwriting, so its
+/// samples make honest fixtures: any regression in the preprocessing contract, the int8
+/// kernel, or the label space breaks them instantly. (This is exactly how the scale-
+/// invariance bug in `global_features` would have been caught the moment it landed.)
+///
+/// Strokes are rescaled into the device's frame — bbox to `[0,1]`, aspect preserved —
+/// because that is what an `.ink` *is*: normalized ink, not somebody's pixel grid.
+fn export_corpus(input: &Path, out_dir: &Path, want: &Path) -> Result<()> {
+    let text =
+        std::fs::read_to_string(want).with_context(|| format!("reading {}", want.display()))?;
+    let wanted: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    std::fs::create_dir_all(out_dir)?;
+
+    let mut taken: HashMap<&str, ()> = HashMap::new();
+    for_each_sample(input, |s| {
+        let Some(&class) = wanted.iter().find(|c| **c == s.class) else {
+            return Ok(()); // not one of the classes asked for
+        };
+        if taken.contains_key(class) {
+            return Ok(()); // first sample of each class wins
+        }
+
+        // Detexify ships raw pixels; an `.ink` is normalized. Fit the bounding box into
+        // [0,1] with a single uniform scale, so the glyph's aspect ratio survives.
+        let pts = || s.strokes.iter().flat_map(|st| st.points.iter());
+        let Some(p0) = pts().next() else {
+            return Ok(());
+        };
+        let (mut nx, mut ny, mut mx, mut my) = (p0.x, p0.y, p0.x, p0.y);
+        for p in pts() {
+            nx = nx.min(p.x);
+            ny = ny.min(p.y);
+            mx = mx.max(p.x);
+            my = my.max(p.y);
+        }
+        let span = (mx - nx).max(my - ny).max(1e-6);
+
+        let ink = Ink {
+            source_width: 1.0,
+            source_height: 1.0,
+            strokes: s
+                .strokes
+                .iter()
+                .map(|st| ink2tex_core::Stroke {
+                    points: st
+                        .points
+                        .iter()
+                        .map(|p| {
+                            ink2tex_core::Point::new(
+                                (p.x - nx) / span,
+                                (p.y - ny) / span,
+                                p.pressure,
+                                p.tilt_x,
+                                p.tilt_y,
+                                p.t_us,
+                            )
+                        })
+                        .collect(),
+                })
+                .collect(),
+        };
+
+        let stem = class.replace(':', "_");
+        std::fs::write(out_dir.join(format!("{stem}.ink")), ink.encode())?;
+        std::fs::write(
+            out_dir.join(format!("{stem}.expected.tex")),
+            format!("{}\n", ink2tex_core::latex::symbol_command(class)),
+        )?;
+        eprintln!(
+            "  {stem}.ink  ({} strokes) → {}",
+            ink.strokes.len(),
+            ink2tex_core::latex::symbol_command(class)
+        );
+        taken.insert(class, ());
+        Ok(())
+    })?;
+
+    eprintln!(
+        "exported {} corpus case(s) to {}/",
+        taken.len(),
+        out_dir.display()
+    );
+    for c in &wanted {
+        if !taken.contains_key(c) {
+            eprintln!("  ⚠ no sample found for {c}");
+        }
+    }
+    Ok(())
+}
+
+/// Pull samples through `f` one at a time. NDJSON streams (constant memory); anything
+/// else is re-read as a single document, which is fine — only the bulk dump is big.
+fn for_each_sample(input: &Path, mut f: impl FnMut(&detexify::Sample) -> Result<()>) -> Result<()> {
+    let mut any = false;
+    for line in open_input(input)?.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(s) = detexify::parse_line(&line) {
+            any = true;
+            f(&s)?;
+        }
+    }
+    if any {
+        return Ok(());
+    }
+    // Not NDJSON — the cloudant export is one big JSON document.
+    let text =
+        std::fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
+    for s in detexify::parse(&text)? {
+        f(&s)?;
+    }
     Ok(())
 }
 
@@ -375,6 +603,21 @@ fn eval_dataset(dir: &Path, model_path: &Path) -> Result<()> {
 
     let px = size * size;
     let (mut top1, mut top5) = (0usize, 0usize);
+    // Per-class tallies as well as the running totals. The corpus is heavily imbalanced
+    // — `\int` has 3,937 samples where the median class has 53 — so a micro average is
+    // dominated by the head and can read as excellent while the tail is unusable. The
+    // macro average (mean per-class recall) is the number that notices.
+    let n_classes = meta["num_classes"].as_u64().unwrap_or(0) as usize;
+    let n_classes = if n_classes > 0 {
+        n_classes
+    } else {
+        labels_all.iter().max().map_or(0, |m| *m as usize + 1)
+    };
+    let (mut cls_n, mut cls_hit1, mut cls_hit5) = (
+        vec![0usize; n_classes],
+        vec![0usize; n_classes],
+        vec![0usize; n_classes],
+    );
     for i in 0..n {
         let bitmap: Vec<f32> = images[i * px..(i + 1) * px]
             .iter()
@@ -388,11 +631,14 @@ fn eval_dataset(dir: &Path, model_path: &Path) -> Result<()> {
         };
         let label = labels_all[i] as usize;
         let preds = recognize(&weights, &bitmap, feats, online, size, 5)?;
+        cls_n[label] += 1;
         if preds.first().map(|p| p.class) == Some(label) {
             top1 += 1;
+            cls_hit1[label] += 1;
         }
         if preds.iter().any(|p| p.class == label) {
             top5 += 1;
+            cls_hit5[label] += 1;
         }
     }
     let pct = |c: usize| 100.0 * c as f64 / n.max(1) as f64;
@@ -401,5 +647,24 @@ fn eval_dataset(dir: &Path, model_path: &Path) -> Result<()> {
         pct(top1),
         pct(top5)
     );
+
+    // Macro: average the per-class rates, over the classes this split actually contains.
+    let present: Vec<usize> = (0..n_classes).filter(|&c| cls_n[c] > 0).collect();
+    if !present.is_empty() {
+        let mean = |hits: &[usize]| {
+            100.0
+                * present
+                    .iter()
+                    .map(|&c| hits[c] as f64 / cls_n[c] as f64)
+                    .sum::<f64>()
+                / present.len() as f64
+        };
+        println!(
+            "  macro (mean over the {} classes present): top-1 {:.1}%  top-5 {:.1}%",
+            present.len(),
+            mean(&cls_hit1),
+            mean(&cls_hit5)
+        );
+    }
     Ok(())
 }

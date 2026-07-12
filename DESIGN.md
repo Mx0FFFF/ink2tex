@@ -148,7 +148,9 @@ For M2 (linear expressions), greedy temporal+spatial grouping gets you 80% of th
 
 **Model:** small CNN on (a) + small 1D conv on (b) → concat → dense → softmax over ~120 classes (CROHME's 111 + extras).
 
-For M1, ship just the CNN over (a) plus a handful of global stroke features (stroke count, aspect ratio, arc length, start/end position). Add (b) in M2.
+For M1, ship just the CNN over (a) plus a handful of global stroke features (stroke count, elongation, arc length, start/end position). Add (b) in M2.
+
+⚠️ **Those global features must be dimensionless** — measured in the ink's own bounding box, never in raw coordinates, and bounded. The bitmap channel is scale-invariant for free (it aspect-fits); this vector is not, and the ink reaching it arrives in whatever units its source uses (Detexify's bulk dump: screen pixels; the device: normalized). Emitting raw units bakes the training corpus's coordinate system into the weights, and the model then falls apart on the device. It happened — see `crates/core/src/classify/raster.rs::global_features`.
 
 **Inference: hand-roll it. Do not link TFLite or ONNX Runtime.**
 

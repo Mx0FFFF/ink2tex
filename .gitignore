@@ -9,8 +9,11 @@ device-facts.out
 # python / training artifacts
 __pycache__/
 *.pyc
-/train/dataset/
+/train/dataset*/
 /train/detexify_raw/
+# Experiment models (A/B runs). Only train/model.iwt is the shipped reference.
+/train/model_small.*
+/train/model_full.*
 # NOTE: train/model.iwt + train/model.labels.txt ARE committed — the reference
 # model for the tests/corpus regression suite (small; also lets `make recognize`
 # work straight from a clone).
