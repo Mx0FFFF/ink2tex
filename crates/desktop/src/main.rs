@@ -204,7 +204,7 @@ fn main() -> Result<()> {
             .with_context(|| format!("reading {}", model_path.display()))?;
         let weights = Weights::parse(&blob).context("parsing model .iwt")?;
         let line =
-            ink2tex_core::recognize_line(&ink, &weights, 3).context("expression recognizer")?;
+            ink2tex_core::recognize_line(&ink, &weights, 5).context("expression recognizer")?;
         let labels = match cli.labels {
             Some(p) => Some(Labels::from_lines(
                 &std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?,

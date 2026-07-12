@@ -334,7 +334,43 @@ The one lingering **M0** item is rm2fb for on-screen *inking* (recognition doesn
 
 ---
 
-## ⛔ M2/M3 rest on a classifier that cannot say `+`, `-`, `=`, a digit, or a letter
+## ⛔ M2 needs its own corpus. Downloading one is not enough — and I proved it.
+
+**The vocabulary gap is closed; the *usability* gap is not.** HWRT (ODbL) added the 65 missing
+tokens — `0-9`, `a-z`, `A-Z`, `+ - < >` — and the model learns them **86.7% top-5** on
+held-out HWRT data. But on **real reMarkable ink they still lose**:
+
+| your `√x+1` | model says | |
+|---|---|---|
+| `x` | `\upchi` · `\chi` · `\mathcal{X}` · `\texttimes` · `\textchi` | `x` not in top-5 |
+| `+` | `\dashv` 55% · … · **`+` 6.2%** | rank 4 — the correction UI would catch it |
+| `1` | `\Lbag` · `\wr` · `\prime` | `1` not in top-5 |
+
+It is not confused about the *shape* — every guess for `x` is an x/chi glyph. Two things beat it:
+
+1. **~80 samples, and from the wrong device.** The classes that *do* work on your ink have
+   **20–65× more data**: `\sum` 3,877 · `\alpha` 2,544 · `\infty` 2,159 · `\sqrt` 1,020,
+   against `x` 59 · `+` 81 · `1` 106. And HWRT/Detexify are **browser-drawn** (mouse, trackpad);
+   with thousands of samples a class still transfers to a pen, with eighty it does not.
+2. **Detexify's prior is anti-correlated with writing.** `\int` has 3,937 samples *because*
+   people look it up; `+` had zero *because nobody needs to*. Trained unweighted the model
+   learns `\oplus` is 15× likelier than `+`.
+
+**Class weighting (1/√count) was tried and rejected.** It bought macro (+2.2 top-5, +5.4 top-1)
+but pushed **`\pi` out of the top-5** on a real corpus fixture. A common symbol regressing is
+not a trade worth making — and `tests/corpus` caught it, which is exactly what it is for.
+
+**The shipped model stays v1** (Detexify only, 96.8% micro / 13/13 corpus). v2 (+HWRT, 1,188
+classes) passes the corpus and is *strictly more capable in principle*, but costs 0.8 micro for
+tokens that do not yet work on a pen. It is not worth shipping until they do.
+
+⇒ **`--collect` is now the critical path, not a nicety.** The everyday tokens need device-native
+ink — which is precisely the corpus DESIGN §5 says does not exist and is worth building. Ballpark:
+~200 samples each for `x + - = ( ) 1 2 n y`, ≈2,000 drawings. That is the price of `2x + 3 = 7`.
+
+---
+
+## Superseded: M2/M3 rest on a classifier that cannot say `+`, `-`, `=`, a digit, or a letter
 
 Discovered 2026-07-12 while fixing `\sqrt`: the hand-drawn `+` came back as `\rightarrow`,
 and it turns out the model **cannot** do better — those tokens are not in its output space.
