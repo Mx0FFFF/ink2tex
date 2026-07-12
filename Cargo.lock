@@ -248,14 +248,14 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "ink2tex-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "ink2tex-desktop"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -266,7 +266,7 @@ dependencies = [
 
 [[package]]
 name = "ink2tex-rm"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "ink2tex-core",

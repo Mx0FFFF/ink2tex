@@ -5,9 +5,10 @@
 //!   --probe                        enumerate + ioctl-probe the digitizer, print ranges
 //!   --record [--out P] [--dur S]   read the pen, save strokes as .ink (no drawing)
 //!   --ink    [--out P] [--dur S]   same, but also draw live with a DU waveform (arm)
-//!   --recognize --model M [--labels L] [--from INK | --dur S]
+//!   --recognize [--from INK | --dur S] [--model M] [--labels L]
 //!                                  draw (or load --from) a symbol → int8 CNN → top-5
-//!                                  LaTeX on stdout (streamed back over SSH; no rm2fb)
+//!                                  LaTeX on stdout (streamed back over SSH; no rm2fb).
+//!                                  Weights resolve themselves — see `default_asset`.
 //!
 //! No `unwrap()`/`expect()` in runtime paths — a panic here is a dead screen.
 
@@ -17,6 +18,7 @@ mod draw;
 mod evdev;
 mod transform;
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -51,12 +53,24 @@ fn main() -> Result<()> {
 }
 
 fn print_usage() {
-    eprintln!("usage: ink2tex-rm [--probe | --record | --ink | --recognize] [options]");
+    eprintln!(
+        "ink2tex {} — handwritten math → LaTeX, on the tablet, offline.",
+        env!("CARGO_PKG_VERSION")
+    );
+    eprintln!();
+    eprintln!("usage: ink2tex [--probe | --record | --ink | --recognize] [options]");
+    eprintln!("  --recognize [--from INK] [--dur S]");
+    eprintln!("                               draw a symbol (or --from a file) -> top-5 LaTeX");
     eprintln!("  --probe                      find the digitizer, print its axis ranges");
     eprintln!("  --record  [--out P][--dur S]  capture pen strokes to an .ink file");
     eprintln!("  --ink     [--out P][--dur S]  capture AND draw live (device; needs rm2fb)");
-    eprintln!("  --recognize --model M [--labels L] [--from INK | --dur S]");
-    eprintln!("                               draw (or --from a file) a symbol -> top-5 LaTeX");
+    eprintln!();
+    eprintln!(
+        "  --model M / --labels L       override the weights (default: /opt/usr/share/ink2tex,"
+    );
+    eprintln!("                               else alongside the binary)");
+    eprintln!();
+    eprintln!("Draw one symbol, get the five most likely LaTeX commands. No cloud, no network.");
 }
 
 fn flag(args: &[String], name: &str) -> Option<String> {
@@ -64,6 +78,36 @@ fn flag(args: &[String], name: &str) -> Option<String> {
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1))
         .cloned()
+}
+
+/// Where the model lives when nobody says. A packaged install must Just Work — a user
+/// who typed `opkg install ink2tex` should be able to type `ink2tex --recognize`, not
+/// have to know where opkg put the weights.
+///
+/// Searched in order: the Toltec install prefix, then **next to the binary**, which is
+/// what makes a bare `scp`-to-`/home/root` deployment work too (`make deploy-model`).
+/// An explicit `--model` always wins.
+fn default_asset(args: &[String], flag_name: &str, file: &str) -> Result<String> {
+    if let Some(p) = flag(args, flag_name) {
+        return Ok(p);
+    }
+    let mut tried = vec![format!("/opt/usr/share/ink2tex/{file}")];
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(Path::to_path_buf))
+    {
+        tried.push(dir.join(file).to_string_lossy().into_owned());
+    }
+    tried
+        .iter()
+        .find(|p| Path::new(p).is_file())
+        .cloned()
+        .with_context(|| {
+            format!(
+                "no {file} found (looked in {}); pass {flag_name} <path>",
+                tried.join(", ")
+            )
+        })
 }
 
 fn capture_args(args: &[String]) -> (String, Duration) {
@@ -188,7 +232,7 @@ fn recognize(args: &[String]) -> Result<()> {
     };
     use ink2tex_core::latex::symbol_command;
 
-    let model = flag(args, "--model").context("--recognize needs --model <iwt>")?;
+    let model = default_asset(args, "--model", "model.iwt")?;
     let ink = match flag(args, "--from") {
         Some(path) => {
             let bytes = std::fs::read(&path).with_context(|| format!("reading {path}"))?;
@@ -216,11 +260,13 @@ fn recognize(args: &[String]) -> Result<()> {
         t0.elapsed().as_secs_f64() * 1000.0
     );
 
-    let labels = match flag(args, "--labels") {
-        Some(p) => Some(Labels::from_lines(
+    // Labels sit beside the model, so they resolve the same way. Missing labels degrade
+    // to bare class indices rather than failing — a top-5 of numbers still beats an error.
+    let labels = match default_asset(args, "--labels", "model.labels.txt") {
+        Ok(p) => Some(Labels::from_lines(
             &std::fs::read_to_string(&p).with_context(|| format!("reading labels {p}"))?,
         )),
-        None => None,
+        Err(_) => None,
     };
     eprintln!("recognized {} strokes:", ink.strokes.len());
     for (i, p) in preds.iter().enumerate() {

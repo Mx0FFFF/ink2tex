@@ -16,7 +16,7 @@ EPOCHS    ?= 60
 
 .PHONY: test replay harness build-rm deploy probe record run ink recognize \
         deploy-model screenshot check-bans core-purity device-facts fmt clippy ci \
-        dataset train eval
+        dataset train eval ipk
 
 # --- your feedback loops -----------------------------------------------------
 
@@ -98,6 +98,13 @@ recognize: deploy deploy-model
 
 screenshot:
 	ssh $(HOST) 'cat /tmp/screen.png' > /tmp/screen.png && echo "pulled /tmp/screen.png"
+
+# --- packaging ---------------------------------------------------------------
+
+# Build the Toltec/opkg package (.ipk) from the current tree — binary + weights +
+# the ODbL attribution the weights oblige us to carry. See packaging/README.md.
+ipk: build-rm
+	bash packaging/build-ipk.sh
 
 # SSH-probe the device and print the DEVICE FACTS table inputs.
 device-facts:
