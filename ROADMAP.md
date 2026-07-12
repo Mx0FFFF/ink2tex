@@ -7,6 +7,44 @@
 
 ## Current state
 
+### 🐛 `--dur` hung forever with the pen idle (SA_RESTART) — fixed 2026-07-12
+
+Found by *using* the thing, not by testing it. `run_capture` installed its SIGALRM handler
+with `libc::signal()`, and glibc's `signal()` gives BSD semantics — i.e. **SA_RESTART**. So
+when the alarm fired, the kernel *restarted* the blocked `read()` on the evdev fd instead of
+failing it with `EINTR`. `STOP` was set, but the loop was parked inside `read()` and never
+looked at it. The code's own comment claimed it exited "even with the pen idle"; that was
+exactly the case that hung. It only ever seemed to work because a still-moving pen kept
+waking the read. Now `sigaction` with `sa_flags = 0`. Verified on hardware: `--dur 10` with
+the pen untouched exits in 10 s (it previously hung indefinitely).
+
+### First live end-to-end run on the tablet (2026-07-12)
+
+A hand-drawn row — `α Σ Π √ ∞` — captured on the device, segmented and classified:
+
+| drawn | top-1 | truth's rank |
+|---|---|---|
+| Σ | `\sum` 66.9% | 1st ✅ |
+| √ | `\sqrt{}` 65.8% | 1st ✅ |
+| ∞ | `\infty` 83.9% | 1st ✅ |
+| α | `\textordfeminine` 74.9% | 3rd (`\alpha` 4.8%) |
+| Π | `\sqcap` 95.6% | 3rd (`\prod` 0.6%) |
+
+**3/5 top-1, 5/5 top-3.** The misses are honest: a cursive α *is* shaped like `ª`/`ɑ`, and a
+square-cornered Π *is* `⊓`. This is the argument for the correction UI in one screenshot.
+
+Two real findings from it:
+- **Segmentation collapses when one stroke envelops the others.** Drawing the same symbols
+  inside a big circle merged 7 of 9 strokes into a single "symbol". `core::segment` clusters
+  by 2-D proximity, so a stroke whose bbox contains its neighbours absorbs them. A circle is
+  not real notation — but a large radical over an expression, tall parens, and a long
+  fraction bar all have this shape. This is the naive segmenter DESIGN §4.2 warned about;
+  the lattice is still owed.
+- **Stray dots become spurious symbols**, and `structure` then makes them super/subscripts
+  (`\infty^{\slash}`). Correct behaviour, garbage input: noise-stroke filtering is needed
+  before M4 gets a UI.
+
+
 **M1's accuracy gate is MET on the full corpus — and a bug that would have broken the
 model on the tablet is fixed.** The classic Detexify bulk dump turned out to be sitting
 in `~/Downloads/detexify.sql.gz` all along (this file used to say it was inaccessible):

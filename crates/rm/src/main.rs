@@ -171,16 +171,24 @@ fn run_capture(
 
     // SAFETY: handlers only do an atomic store (async-signal-safe); alarm is a plain
     // timer. All process-global, but this is a single-threaded binary.
+    //
+    // ## Systems concept: SA_RESTART, and why `signal()` is a trap here
+    // This *must* be `sigaction` with `sa_flags = 0`, not `signal()`. glibc's `signal()`
+    // gives you BSD semantics — it sets **SA_RESTART** — so when the alarm fires the
+    // kernel silently *restarts* the blocked `read()` instead of failing it with `EINTR`.
+    // The handler still sets STOP, but the loop below is parked inside `read()` and never
+    // gets to look at it. The app then hangs forever with the pen idle, which is exactly
+    // the case `--dur` exists for. (This was not theoretical: it hung on the tablet, and
+    // only ever looked fine because a still-moving pen kept waking the read.)
+    // With `sa_flags = 0` the `read()` returns `EINTR`, we break, and the ink gets saved.
     unsafe {
-        libc::signal(libc::SIGINT, on_stop as extern "C" fn(libc::c_int) as usize);
-        libc::signal(
-            libc::SIGTERM,
-            on_stop as extern "C" fn(libc::c_int) as usize,
-        );
-        libc::signal(
-            libc::SIGALRM,
-            on_stop as extern "C" fn(libc::c_int) as usize,
-        );
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = on_stop as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        libc::sigemptyset(&mut sa.sa_mask);
+        sa.sa_flags = 0; // NOT SA_RESTART — we *want* read() to fail with EINTR
+        for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGALRM] {
+            libc::sigaction(sig, &sa, std::ptr::null_mut());
+        }
         libc::alarm(duration.as_secs().min(u32::MAX as u64) as libc::c_uint);
     }
 
