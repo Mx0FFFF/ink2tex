@@ -19,7 +19,7 @@ archs=(rm2)
 
 image=rust:v3.3
 source=(https://github.com/Mx0FFFF/ink2tex/archive/refs/tags/v0.1.0.zip)
-sha256sums=(12306a9d7f7032e286609fd9be68eedd635f4b72352f807fa04b56dd0e834da1)
+sha256sums=(2577c1df13de80dd18a4677813fd2aeab71b669d2f295a5ee7689c4ff43d6a7b)
 
 build() {
     # The device frontend is the only crate that touches the tablet; core is device-free.
