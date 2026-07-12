@@ -60,7 +60,7 @@ Priority: optional
 Maintainer: mago <cryordie40@gmail.com>
 License: MIT
 Architecture: $ARCH
-Homepage: https://github.com/mago/ink2tex
+Homepage: https://github.com/Mx0FFFF/ink2tex
 Installed-Size: $SIZE
 EOF
 

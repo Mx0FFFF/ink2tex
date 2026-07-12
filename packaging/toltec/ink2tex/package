@@ -12,7 +12,7 @@
 
 pkgnames=(ink2tex)
 pkgdesc="Recognize handwritten math symbols and get the LaTeX command — on the tablet, offline"
-url=https://github.com/mago/ink2tex
+url=https://github.com/Mx0FFFF/ink2tex
 pkgver=0.1.0-1
 timestamp=2026-07-12T00:00:00Z
 section="math"
@@ -21,7 +21,7 @@ license=MIT
 archs=(rm2)
 
 image=rust:v3.3
-source=(https://github.com/mago/ink2tex/archive/refs/tags/v0.1.0.zip)
+source=(https://github.com/Mx0FFFF/ink2tex/archive/refs/tags/v0.1.0.zip)
 sha256sums=(SKIP)
 
 build() {
