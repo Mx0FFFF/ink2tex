@@ -16,6 +16,7 @@ pub mod line;
 pub mod segment;
 pub mod stroke;
 pub mod structure;
+pub mod vocab;
 
 pub use classify::Prediction;
 pub use error::{Error, Result};

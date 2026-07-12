@@ -113,9 +113,69 @@ fn a_real_hand_drawn_radical_nests_its_contents() {
     )
     .expect("decode");
 
-    let out = ink2tex_core::recognize_expression(&ink, &weights, &labels, 3).expect("recognize");
+    let out =
+        ink2tex_core::recognize_expression(&ink, &weights, &labels, None, 3).expect("recognize");
     assert!(
         out.starts_with("\\sqrt{") && out.len() > "\\sqrt{}".len(),
         "the radical did not take its contents as an argument: {out:?}"
+    );
+}
+
+/// Every expression-vocabulary entry must exist in the shipped label space. A dead entry
+/// is not an error anywhere else — it just silently narrows the mask, and the first
+/// symptom is some everyday token quietly losing to an exotic one again.
+#[test]
+fn vocabulary_entries_exist_in_the_label_space() {
+    let root = workspace_root();
+    let path = root.join("train/model_v2.labels.txt");
+    if !path.exists() {
+        eprintln!("skipping: {} missing", path.display());
+        return;
+    }
+    let text = std::fs::read_to_string(&path).expect("labels");
+    let have: std::collections::HashSet<&str> = text.lines().map(str::trim).collect();
+    let dead: Vec<&&str> = ink2tex_core::vocab::EXPRESSION_TOKENS
+        .iter()
+        .filter(|t| !have.contains(**t))
+        .collect();
+    assert!(
+        dead.is_empty(),
+        "vocab entries the classifier can never emit: {dead:?}"
+    );
+}
+
+/// The fix for "the model cannot say x": on a real capture of `√x+1`, the expression
+/// path must now put the literal `x` and `+` at top-1 of their symbols. This pins the
+/// whole chain — deep-k, vocabulary mask, training-prior division — against real ink;
+/// the unit tests only ever see synthetic distributions.
+#[test]
+fn everyday_tokens_win_on_real_ink_in_expression_mode() {
+    let root = workspace_root();
+    let model_path = root.join("train/model_v2.iwt");
+    if !model_path.exists() {
+        eprintln!("skipping: {} missing", model_path.display());
+        return;
+    }
+    let blob = std::fs::read(&model_path).expect("read model");
+    let weights = Weights::parse(&blob).expect("parse");
+    let labels = Labels::from_lines(
+        &std::fs::read_to_string(root.join("train/model_v2.labels.txt")).expect("labels"),
+    );
+    let counts: Vec<u32> = std::fs::read_to_string(root.join("train/model_v2.counts.txt"))
+        .expect("counts")
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    let ink = Ink::decode(
+        &std::fs::read(root.join("crates/core/tests/data/radical_over_expression.ink"))
+            .expect("fixture"),
+    )
+    .expect("decode");
+
+    let out = ink2tex_core::recognize_expression(&ink, &weights, &labels, Some(&counts), 3)
+        .expect("recognize");
+    assert!(
+        out.contains('x') && out.contains('+'),
+        "expected the literals x and + inside the expression, got {out:?}"
     );
 }

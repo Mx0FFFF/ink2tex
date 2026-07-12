@@ -364,7 +364,34 @@ not a trade worth making — and `tests/corpus` caught it, which is exactly what
 classes) passes the corpus and is *strictly more capable in principle*, but costs 0.8 micro for
 tokens that do not yet work on a pen. It is not worth shipping until they do.
 
-⇒ **`--collect` is now the critical path, not a nicety.** The everyday tokens need device-native
+### ✅ …and then the expression path got its own vocabulary, which fixed most of it (2026-07-12)
+
+DESIGN §4.3 specified the expression recognizer over "~120 classes (CROHME's 111 + extras)".
+M2 had quietly inherited the full 1,188-class *lookup* space — and that, not the model, was
+most of the problem. `core::vocab` now defines the ~184-token expression vocabulary, and
+`core::line::expression_rank` masks the classifier's deep ranking to it and divides out the
+training prior (score ∝ p/count, Menon et al. logit adjustment — the *inference-time* form of
+what v3 tried at the loss level, applied only in the expression path, so M1 and the corpus
+suite are bit-identical).
+
+On the real `√x+1` capture, with the v2 model + counts sidecar:
+
+    before   \sqrt{\upchi\dashv\Lbag}
+    after    \sqrt{x+\rceil}      x 44.5% top-1 (was: not in top-5)
+                                   + 49.2% top-1 (was: rank 6 at 5.0%)
+
+`1` still reads `\rceil` — that class has only 86 samples itself, so the prior correction
+cannot demote it; that residual is a genuine likelihood gap (browser-drawn vs pen ink) that
+only device-native samples close. The regression guard (`α Σ Π √ ∞` row) held: nothing that
+was right became wrong. Pinned by an e2e test on the real capture
+(`everyday_tokens_win_on_real_ink_in_expression_mode`), and the vocabulary is asserted
+against the label space so a dead entry cannot silently narrow the mask.
+
+**Expression mode uses `model_v2` + `model_v2.counts.txt`** (both committed); the shipped M1
+package still carries v1 and is untouched.
+
+⇒ **`--collect` remains the path to finishing the job** — `1` vs `⌉`, `x` vs `χ` calibration,
+and the three tokens that exist nowhere (`=`, `(`, `)`). The everyday tokens need device-native
 ink — which is precisely the corpus DESIGN §5 says does not exist and is worth building. Ballpark:
 ~200 samples each for `x + - = ( ) 1 2 n y`, ≈2,000 drawings. That is the price of `2x + 3 = 7`.
 

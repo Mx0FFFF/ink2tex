@@ -331,7 +331,7 @@ def calibrate_input_scales(model, X, O, F, n_calib=2048):
     return {k: (v / 127.0 if v > 0 else 1.0) for k, v in acts.items()}
 
 
-def export(model, classes, out_path, s_in):
+def export(model, classes, out_path, s_in, y_all):
     """Write the int8 model as `.iwt` (contract in the module docstring) + labels."""
     w = iwt.WeightsWriter()
     layers = [("c1", model.c1), ("c2", model.c2), ("o1", model.o1), ("f1", model.f1), ("f2", model.f2)]
@@ -350,6 +350,12 @@ def export(model, classes, out_path, s_in):
     w.write(out_path)
     with open(os.path.splitext(out_path)[0] + ".labels.txt", "w") as f:
         f.write("\n".join(classes) + "\n")
+    # Per-class training-sample counts, aligned with the labels file. The expression path
+    # divides these out at inference (core::line::expression_rank): Detexify's frequencies
+    # are a lookup service's, not a writer's, and without this `x` (59 samples) can never
+    # out-rank `\chi` (958) no matter how cleanly it is drawn.
+    with open(os.path.splitext(out_path)[0] + ".counts.txt", "w") as f:
+        f.write("\n".join(str(c) for c in np.bincount(y_all, minlength=len(classes))) + "\n")
     print(f"wrote {out_path} ({len(w.to_bytes())} bytes) + labels for {len(classes)} classes")
 
 
@@ -412,7 +418,7 @@ def main():
     if args.dump_val:
         dump_val(args.dump_val, X, O, F, y, classes, va, size, nf)
     s_in = calibrate_input_scales(model, X, O, F)
-    export(model, classes, args.out, s_in)
+    export(model, classes, args.out, s_in, y)
 
 
 if __name__ == "__main__":

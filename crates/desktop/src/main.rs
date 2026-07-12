@@ -196,6 +196,11 @@ fn main() -> Result<()> {
 
     if let Some(ink_path) = cli.recognize_expr {
         let model_path = cli.model.context("--recognize-expr needs --model <iwt>")?;
+        // Expression mode ranks over the expression vocabulary, which is defined in terms
+        // of labels — so labels are required here, unlike in plain --recognize.
+        let labels_path = cli
+            .labels
+            .context("--recognize-expr needs --labels <txt>")?;
         let bytes =
             std::fs::read(&ink_path).with_context(|| format!("reading {}", ink_path.display()))?;
         let ink = Ink::decode(&bytes)
@@ -203,29 +208,35 @@ fn main() -> Result<()> {
         let blob = std::fs::read(&model_path)
             .with_context(|| format!("reading {}", model_path.display()))?;
         let weights = Weights::parse(&blob).context("parsing model .iwt")?;
-        let line =
-            ink2tex_core::recognize_line(&ink, &weights, 5).context("expression recognizer")?;
-        let labels = match cli.labels {
-            Some(p) => Some(Labels::from_lines(
-                &std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?,
-            )),
-            None => None,
+        let labels = Labels::from_lines(
+            &std::fs::read_to_string(&labels_path)
+                .with_context(|| format!("reading {}", labels_path.display()))?,
+        );
+        // Per-class training counts, written by the trainer beside the labels file
+        // (`model.labels.txt` → `model.counts.txt`). Optional: without it the expression
+        // path still masks to the vocabulary, it just cannot divide out the lookup-corpus
+        // prior — and then `x` keeps losing to `\chi` (958 training samples vs 59).
+        let counts: Option<Vec<u32>> = {
+            let p = labels_path
+                .to_string_lossy()
+                .replace(".labels.txt", ".counts.txt");
+            std::fs::read_to_string(&p).ok().map(|text| {
+                eprintln!("(training-prior correction active: {p})");
+                text.lines().filter_map(|l| l.trim().parse().ok()).collect()
+            })
         };
+        let line = ink2tex_core::recognize_line(&ink, &weights, &labels, counts.as_deref(), 5)
+            .context("expression recognizer")?;
         let name = |c: usize| {
             labels
-                .as_ref()
-                .and_then(|l| l.get(c))
+                .get(c)
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("class {c}"))
         };
-        // The headline: the full 2-D structure → LaTeX (needs labels for √/bar/op tokens).
-        if let Some(l) = labels.as_ref() {
-            match ink2tex_core::recognize_expression(&ink, &weights, l, 3) {
-                Ok(latex) => println!("LaTeX: {latex}"),
-                Err(e) => eprintln!("structure error: {e}"),
-            }
-        } else {
-            eprintln!("(pass --labels for structured LaTeX)");
+        // The headline: the full 2-D structure → LaTeX.
+        match ink2tex_core::recognize_expression(&ink, &weights, &labels, counts.as_deref(), 3) {
+            Ok(latex) => println!("LaTeX: {latex}"),
+            Err(e) => eprintln!("structure error: {e}"),
         }
         let seq: Vec<String> = line
             .iter()
