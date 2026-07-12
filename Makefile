@@ -15,7 +15,7 @@ VALSET    ?= train/dataset_val
 EPOCHS    ?= 60
 
 .PHONY: test replay harness build-rm deploy probe record run ink recognize \
-        deploy-model screenshot check-bans core-purity device-facts fmt clippy ci \
+        deploy-model deploy-expr expr screenshot check-bans core-purity device-facts fmt clippy ci \
         dataset train eval ipk
 
 # --- your feedback loops -----------------------------------------------------
@@ -90,6 +90,18 @@ run ink: deploy
 deploy-model:
 	scp $(MODEL) $(HOST):/home/root/model.iwt
 	scp $(LABELS) $(HOST):/home/root/model.labels.txt
+
+# Push the EXPRESSION model (v4: + collected device ink; has =, (, ), t, digits, letters)
+# under the role-names the --expr mode looks for. Separate from the M1 lookup model on
+# purpose: the two modes answer different questions (DESIGN §4.3).
+deploy-expr:
+	scp train/model_v4.iwt $(HOST):/home/root/expr.iwt
+	scp train/model_v4.labels.txt $(HOST):/home/root/expr.labels.txt
+	scp train/model_v4.counts.txt $(HOST):/home/root/expr.counts.txt
+
+# Write a line of math on the tablet -> LaTeX in this terminal. All on-device compute.
+expr: deploy deploy-expr
+	ssh $(HOST) '$(RM_BIN) --expr --dur $(DUR)'
 
 # On-device recognition: draw one symbol, get top-5 LaTeX in your terminal.
 # Result goes to stdout over SSH, so this needs NO rm2fb.

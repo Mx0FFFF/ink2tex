@@ -173,7 +173,7 @@ fn everyday_tokens_win_on_real_ink_in_expression_mode() {
     )
     .expect("decode");
 
-    let line =
+    let (_ink, line) =
         ink2tex_core::recognize_line(&ink, &weights, &labels, Some(&counts), 5).expect("recognize");
     assert_eq!(line.len(), 4, "√ x + 1 should segment to 4 symbols");
     let names: Vec<Vec<&str>> = line
@@ -233,7 +233,7 @@ fn the_first_full_equation_2x_plus_3_equals_7() {
     )
     .expect("decode");
 
-    let line =
+    let (_ink, line) =
         ink2tex_core::recognize_line(&ink, &weights, &labels, Some(&counts), 5).expect("recognize");
     let names: Vec<Vec<&str>> = line
         .iter()
@@ -259,5 +259,42 @@ fn the_first_full_equation_2x_plus_3_equals_7() {
     assert!(
         latex.starts_with("2x+3="),
         "flat baseline parse, got {latex:?}"
+    );
+}
+
+/// The SAME equation, exactly as the digitizer delivered it: rotated 90°, because the
+/// tablet was held in landscape — the natural grip for a long expression. This is the
+/// capture that used to require hand-rotation. `orient::auto_orient` must detect the
+/// vertical symbol line, hold its three-way ballot (as-is / CW / CCW), and land on the
+/// same reading as the manually-rotated fixture above.
+#[test]
+fn a_landscape_equation_orients_itself() {
+    let root = workspace_root();
+    let model_path = root.join("train/model_v4.iwt");
+    if !model_path.exists() {
+        eprintln!("skipping: {} missing", model_path.display());
+        return;
+    }
+    let blob = std::fs::read(&model_path).expect("read model");
+    let weights = Weights::parse(&blob).expect("parse");
+    let labels = Labels::from_lines(
+        &std::fs::read_to_string(root.join("train/model_v4.labels.txt")).expect("labels"),
+    );
+    let counts: Vec<u32> = std::fs::read_to_string(root.join("train/model_v4.counts.txt"))
+        .expect("counts")
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    let ink = Ink::decode(
+        &std::fs::read(root.join("crates/core/tests/data/equation_landscape_raw.ink"))
+            .expect("fixture"),
+    )
+    .expect("decode");
+
+    let latex = ink2tex_core::recognize_expression(&ink, &weights, &labels, Some(&counts), 3)
+        .expect("latex");
+    assert!(
+        latex.starts_with("2x+3="),
+        "landscape ink did not orient itself: {latex:?}"
     );
 }

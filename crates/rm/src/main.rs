@@ -8,6 +8,9 @@
 //!   --collect --symbol S [--count N]
 //!                                  draw S repeatedly -> NDJSON training samples (the tokens
 //!                                  no permissively-licensed dataset has: `=`, `(`, `)`)
+//!   --expr [--from INK | --dur S]     write a whole EXPRESSION → LaTeX on stdout.
+//!                                  Auto-orients landscape ink; uses the expression
+//!                                  model (expr.iwt — `make deploy-expr`).
 //!   --recognize [--from INK | --dur S] [--model M] [--labels L]
 //!                                  draw (or load --from) a symbol → int8 CNN → top-5
 //!                                  LaTeX on stdout (streamed back over SSH; no rm2fb).
@@ -44,6 +47,7 @@ fn main() -> Result<()> {
         Some("--ink") => ink(&args),
         Some("--recognize") => recognize(&args),
         Some("--collect") => collect(&args),
+        Some("--expr") => expr(&args),
         Some("-h") | Some("--help") => {
             print_usage();
             Ok(())
@@ -70,6 +74,7 @@ fn print_usage() {
     eprintln!("  --ink     [--out P][--dur S]  capture AND draw live (device; needs rm2fb)");
     eprintln!("  --collect --symbol S [--count N] [--out P] [--idle-ms MS]");
     eprintln!("                               draw S over and over -> NDJSON training samples");
+    eprintln!("  --expr    [--from INK][--dur S]  write an EXPRESSION -> LaTeX (uses expr.iwt)");
     eprintln!();
     eprintln!(
         "  --model M / --labels L       override the weights (default: /opt/usr/share/ink2tex,"
@@ -288,6 +293,86 @@ fn ndjson_sample(symbol: &str, ink: &Ink) -> String {
         .collect();
     let key = symbol.replace('\\', "\\\\").replace('"', "\\\"");
     format!(r#"{{"key":"{key}","strokes":[{}]}}"#, strokes.join(","))
+}
+
+/// Recognize a whole EXPRESSION: capture (or `--from`) a line of math, run the full
+/// core pipeline — auto-orientation, denoising, segmentation (stacked-bar `=` merge),
+/// per-symbol int8 classification over the expression vocabulary with the training-prior
+/// correction, 2-D structure — and print LaTeX. Everything happens on this CPU.
+///
+/// Uses the *expression* model (`expr.iwt` + labels + counts, deployed by
+/// `make deploy-expr`), not the M1 lookup model: the lookup model has no digits, letters
+/// or operators, and expression ranking is masked to ~190 expression-plausible tokens —
+/// the two modes answer different questions (DESIGN §4.3).
+fn expr(args: &[String]) -> Result<()> {
+    use ink2tex_core::classify::{Labels, Weights};
+    use ink2tex_core::latex::symbol_command;
+
+    let model = default_asset(args, "--model", "expr.iwt")?;
+    let labels_path = default_asset(args, "--labels", "expr.labels.txt")?;
+    let ink = match flag(args, "--from") {
+        Some(path) => {
+            let bytes = std::fs::read(&path).with_context(|| format!("reading {path}"))?;
+            Ink::decode(&bytes).with_context(|| format!("parsing {path} as .ink"))?
+        }
+        None => {
+            let dur = flag(args, "--dur")
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(30));
+            let dev = device_arg(args);
+            run_capture(
+                dur,
+                "expr (write one line of math)",
+                dev.as_deref(),
+                |_seg| {},
+            )?
+        }
+    };
+
+    let blob = std::fs::read(&model).with_context(|| format!("reading model {model}"))?;
+    let weights = Weights::parse(&blob).context("parsing expr model .iwt")?;
+    let labels = Labels::from_lines(
+        &std::fs::read_to_string(&labels_path)
+            .with_context(|| format!("reading labels {labels_path}"))?,
+    );
+    // Counts unlock the training-prior correction; without them `x` loses to `\chi`
+    // (958 lookup-corpus samples vs 59). Degrade politely rather than refuse.
+    let counts: Option<Vec<u32>> = default_asset(args, "--counts", "expr.counts.txt")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| t.lines().filter_map(|l| l.trim().parse().ok()).collect());
+    if counts.is_none() {
+        eprintln!("(no expr.counts.txt — prior correction off, expect worse letters/digits)");
+    }
+
+    let t0 = std::time::Instant::now();
+    let latex = ink2tex_core::recognize_expression(&ink, &weights, &labels, counts.as_deref(), 3)
+        .context("expression recognizer")?;
+    let (_oriented, line) =
+        ink2tex_core::recognize_line(&ink, &weights, &labels, counts.as_deref(), 3)
+            .context("per-symbol ranking")?;
+    eprintln!(
+        "recognized {} symbol(s) in {:.0} ms (incl. orientation ballot if held)",
+        line.len(),
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
+
+    println!("LaTeX: {latex}");
+    for (i, s) in line.iter().enumerate() {
+        let alts: Vec<String> = s
+            .predictions
+            .iter()
+            .map(|p| {
+                labels
+                    .get(p.class)
+                    .map(|l| format!("{} {:.0}%", symbol_command(l), p.prob * 100.0))
+                    .unwrap_or_else(|| format!("class{} ", p.class))
+            })
+            .collect();
+        println!("  {}. {}", i + 1, alts.join("  |  "));
+    }
+    Ok(())
 }
 
 /// Enumerate `/dev/input/event*`, find the pen digitizer by capability, and dump

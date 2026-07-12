@@ -13,6 +13,7 @@ pub mod error;
 pub mod format;
 pub mod latex;
 pub mod line;
+pub mod orient;
 pub mod segment;
 pub mod stroke;
 pub mod structure;

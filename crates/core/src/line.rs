@@ -104,13 +104,25 @@ pub fn expression_rank(
 /// `counts` is the per-class training-sample count aligned with `labels` (the
 /// `.counts.txt` the trainer writes beside the labels file); `None` skips the prior
 /// correction but keeps the mask.
+///
+/// Returns the **oriented ink** alongside the symbols, and every downstream consumer
+/// must use it. The first landscape capture taught why the hard way: orientation was
+/// once internal to this function, classification saw rotated glyphs (right labels!),
+/// but the structure parse computed its bboxes from the caller's original vertical ink —
+/// and laid perfectly-recognized symbols out as `2\frac{{>_{{=}}}}{{x^{{+}}}}`. Stroke
+/// *indices* survive rotation; *coordinates* do not.
 pub fn recognize_line(
     ink: &Ink,
     weights: &Weights,
     labels: &Labels,
     counts: Option<&[u32]>,
     k: usize,
-) -> Result<Vec<LineSymbol>> {
+) -> Result<(Ink, Vec<LineSymbol>)> {
+    // Landscape grip first: if the symbol line runs vertically, the tablet was held
+    // sideways and every glyph is rotated 90° — rotate upright before anything else
+    // looks at the ink (see `orient`). Portrait ink short-circuits to a clone.
+    let ink = &crate::orient::auto_orient(ink, weights)?;
+
     // Stray taps first: we read the pen below xochitl, so a tap on its toolbar arrives as
     // a tiny stroke, and without this `segment` calls it a symbol and `structure` makes it
     // a superscript. `keep_indices` (not `denoise`) because `LineSymbol::strokes` must
@@ -134,7 +146,7 @@ pub fn recognize_line(
             predictions,
         });
     }
-    Ok(out)
+    Ok((ink.clone(), out))
 }
 
 /// The whole pipeline: **ink → segment → classify → 2-D structure → LaTeX** (M1 +
@@ -149,8 +161,10 @@ pub fn recognize_expression(
     counts: Option<&[u32]>,
     k: usize,
 ) -> Result<String> {
+    let (ink, line) = recognize_line(ink, weights, labels, counts, k)?;
+    let ink = &ink; // the ORIENTED ink — bboxes must come from the same frame as the labels
     let mut symbols = Vec::new();
-    for ls in recognize_line(ink, weights, labels, counts, k)? {
+    for ls in line {
         let Some(top) = ls.predictions.first() else {
             continue;
         };

@@ -225,8 +225,9 @@ fn main() -> Result<()> {
                 text.lines().filter_map(|l| l.trim().parse().ok()).collect()
             })
         };
-        let line = ink2tex_core::recognize_line(&ink, &weights, &labels, counts.as_deref(), 5)
-            .context("expression recognizer")?;
+        let (_oriented, line) =
+            ink2tex_core::recognize_line(&ink, &weights, &labels, counts.as_deref(), 5)
+                .context("expression recognizer")?;
         let name = |c: usize| {
             labels
                 .get(c)

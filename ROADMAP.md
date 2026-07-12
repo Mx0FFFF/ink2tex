@@ -430,9 +430,26 @@ Three fixes fell out of this single capture, each pinned by tests:
   against the base's midline, with the margin scaled by the *neighbour's* height (the
   base-scaled version broke `\int_a^b`, whose limits sit close to a very tall operator).
 
-**Found, not yet handled:** the equation was written with the tablet in landscape; the
-digitizer frame is portrait, so the ink arrived rotated 90° and was counter-rotated by
-hand. Orientation detection (or a --landscape flag) is owed before real users hit it.
+### ✅ 2026-07-13: landscape auto-orientation + expression mode ON the device
+
+The equation had been written with the tablet held sideways (the natural grip for a long
+expression) and needed hand-rotation. Now `core::orient` handles it: if the segmented
+symbol line runs vertically, a **three-way ballot** is held — as-is, rotated CW, rotated
+CCW — and a few symbols from each are classified; the orientation the model reads with
+most confidence wins. The original competes because *an isolated fraction is geometrically
+indistinguishable from a vertical line* (a unit test almost shipped that bug); upright ink
+defends itself by classifying well. Portrait ink short-circuits to a no-op.
+
+One integration lesson, preserved in `recognize_line`'s signature: orientation was briefly
+internal to it — classification saw rotated glyphs (right labels!) while `structure` got
+the caller's original vertical coordinates, and perfectly-recognized symbols were laid out
+as `2\frac{>_{=}}{x^{+}}`. The oriented ink is now *returned*, and every consumer uses it.
+
+And `--expr` runs on the tablet: capture (or `--from`) → orientation → denoise → segment →
+int8 classify over the expression vocabulary with prior correction → structure → LaTeX,
+entirely on the Cortex-A7. The raw landscape equation: **`2x+3=>` in 548 ms**, per-symbol
+output matching x86 digit for digit. `make deploy-expr && make expr`. The expression model
+(v4) ships under role-names (`expr.iwt`) beside the untouched M1 lookup model.
 
 ⇒ **`--collect` remains the path to finishing the job** — `1` vs `⌉`, `x` vs `χ` calibration,
 and the three tokens that exist nowhere (`=`, `(`, `)`). The everyday tokens need device-native
