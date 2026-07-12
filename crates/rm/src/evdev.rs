@@ -234,6 +234,36 @@ fn is_digitizer(fd: RawFd) -> io::Result<bool> {
     Ok(test_bit(&keys, BTN_TOOL_PEN as usize) && test_bit(&abs, ABS_PRESSURE as usize))
 }
 
+/// Open one specific node as the digitizer, skipping enumeration.
+///
+/// This is **not** a licence to hardcode `/dev/input/event1` — event numbering is not
+/// stable and `find_digitizer` stays the default. It exists so a *synthetic* pen (uinput)
+/// can be pointed at explicitly: the eraser path can then be exercised on a device whose
+/// Marker has no eraser end, which is otherwise dead, shipped, untested code.
+pub fn open_digitizer(path: &str) -> io::Result<Digitizer> {
+    let cpath = CString::new(path)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "device path has a NUL"))?;
+    let fd = open_ro(&cpath)?;
+    let raw = fd.raw();
+    if !is_digitizer(raw).unwrap_or(false) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{path} does not advertise BTN_TOOL_PEN + ABS_PRESSURE"),
+        ));
+    }
+    Ok(Digitizer {
+        name: get_name(raw).unwrap_or_default(),
+        x: get_abs(raw, ABS_X)?,
+        y: get_abs(raw, ABS_Y)?,
+        pressure: get_abs(raw, ABS_PRESSURE)?,
+        tilt_x: get_abs(raw, ABS_TILT_X).unwrap_or_default(),
+        tilt_y: get_abs(raw, ABS_TILT_Y).unwrap_or_default(),
+        distance: get_abs(raw, ABS_DISTANCE).unwrap_or_default(),
+        path: path.to_string(),
+        fd,
+    })
+}
+
 /// Enumerate `/dev/input/event*`, probe each, return the first pen digitizer.
 pub fn find_digitizer() -> io::Result<Digitizer> {
     let mut nodes: Vec<String> = std::fs::read_dir("/dev/input")?

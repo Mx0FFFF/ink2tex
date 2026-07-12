@@ -110,6 +110,11 @@ fn default_asset(args: &[String], flag_name: &str, file: &str) -> Result<String>
         })
 }
 
+/// `--device <path>` bypasses enumeration (used to point at a synthetic uinput pen).
+fn device_arg(args: &[String]) -> Option<String> {
+    flag(args, "--device")
+}
+
 fn capture_args(args: &[String]) -> (String, Duration) {
     let out = flag(args, "--out").unwrap_or_else(|| "/home/root/out.ink".to_string());
     let secs = flag(args, "--dur")
@@ -161,9 +166,13 @@ fn probe() -> Result<()> {
 fn run_capture(
     duration: Duration,
     mode_label: &str,
+    device: Option<&str>,
     mut on_segment: impl FnMut(&capture::Segment),
 ) -> Result<Ink> {
-    let dig = evdev::find_digitizer().context("locating the pen digitizer")?;
+    let dig = match device {
+        Some(p) => evdev::open_digitizer(p).with_context(|| format!("opening {p}"))?,
+        None => evdev::find_digitizer().context("locating the pen digitizer")?,
+    };
     eprintln!(
         "digitizer: {} ({}) — mode: {}",
         dig.path, dig.name, mode_label
@@ -225,8 +234,9 @@ fn save(ink: &Ink, out: &str) -> Result<()> {
 }
 
 fn record(args: &[String]) -> Result<()> {
+    let dev = device_arg(args);
     let (out, dur) = capture_args(args);
-    let ink = run_capture(dur, "record (no drawing)", |_seg| {})?;
+    let ink = run_capture(dur, "record (no drawing)", dev.as_deref(), |_seg| {})?;
     save(&ink, &out)
 }
 
@@ -235,6 +245,7 @@ fn record(args: &[String]) -> Result<()> {
 /// This is a thin wrapper over the device-free `core::classify` — all the real work
 /// (rasterize, quantize, conv/dense, softmax) is in core.
 fn recognize(args: &[String]) -> Result<()> {
+    let dev = device_arg(args);
     use ink2tex_core::classify::{
         global_features, online_features, rasterize, Labels, Weights, ONLINE_POINTS,
     };
@@ -251,7 +262,12 @@ fn recognize(args: &[String]) -> Result<()> {
                 .and_then(|s| s.parse::<u64>().ok())
                 .map(Duration::from_secs)
                 .unwrap_or(Duration::from_secs(20));
-            run_capture(dur, "recognize (draw one symbol)", |_seg| {})?
+            run_capture(
+                dur,
+                "recognize (draw one symbol)",
+                dev.as_deref(),
+                |_seg| {},
+            )?
         }
     };
 
@@ -296,10 +312,11 @@ fn recognize(args: &[String]) -> Result<()> {
 
 #[cfg(target_arch = "arm")]
 fn ink(args: &[String]) -> Result<()> {
+    let dev = device_arg(args);
     let (out, dur) = capture_args(args);
     let mut screen = draw::Screen::open();
     screen.clear();
-    let ink = run_capture(dur, "ink (live DU draw)", |seg| {
+    let ink = run_capture(dur, "ink (live DU draw)", dev.as_deref(), |seg| {
         // First point of a stroke has no predecessor — draw a dot (from == to).
         let from = seg.from.unwrap_or(seg.to);
         screen.ink_segment(from, seg.to, seg.pressure);

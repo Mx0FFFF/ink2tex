@@ -101,6 +101,18 @@ impl Capture {
             // had drawn it.
             EV_KEY if ev.code == BTN_TOOL_RUBBER => {
                 self.eraser = ev.value != 0;
+                // Say so out loud. Otherwise the only evidence that this gate works is ink
+                // that *didn't* appear — which is indistinguishable from a pen that has no
+                // eraser end, or a user who never flipped it. Absence proves nothing.
+                eprintln!(
+                    "eraser end {} — {}",
+                    if self.eraser { "in range" } else { "withdrawn" },
+                    if self.eraser {
+                        "ignoring it (erasing is not drawing)"
+                    } else {
+                        "tip active again"
+                    }
+                );
                 if self.eraser {
                     self.tip_down = false;
                     self.end_stroke(); // flipped mid-stroke: keep what was drawn, stop here

@@ -45,10 +45,19 @@ to the classifier as ink. It cannot tell the difference, because at the digitize
 Two consequences, one fixed and one owed:
 
 - ✅ **The eraser end was captured as ink.** The rM2 digitizer really does advertise
-  `BTN_TOOL_RUBBER` (KEY bitmask bit `0x141`, verified on hardware), and while the eraser is
-  in range it still emits `BTN_TOUCH` and a full coordinate stream. `capture` only watched
-  `BTN_TOUCH`, so *rubbing something out was recorded as a stroke and then classified*. Now
-  gated on which tool is in range (2 tests).
+  `BTN_TOOL_RUBBER` (KEY bitmask bit `0x141`), and while the eraser is in range it still
+  emits `BTN_TOUCH` and a full coordinate stream. `capture` only watched `BTN_TOUCH`, so
+  *rubbing something out was recorded as a stroke and then classified*. Now gated on which
+  tool is in range.
+  **Proven on the device — but not with the pen.** The Marker here is the basic one, which
+  has *no eraser end*, so it can never emit the event: the physical test showed no erase ink
+  for the wrong reason, and "verified on hardware" would have been a lie. Instrumenting the
+  gate to *announce itself* caught that. So the eraser was synthesized instead, with
+  `/dev/uinput` (`crates/rm/src/bin/fake-pen.rs`) — evdev run backwards: declare the
+  capabilities, `write()` the events, and they reach our reader through the genuine kernel
+  input path. Injected 40 eraser points + 20 pen points; **captured exactly 20**, and the pen
+  stroke survived the flip back (an over-eager gate would be worse than the bug). Repeatable
+  by anyone, no Marker Plus needed.
 - ⛔ **Software tool modes are invisible to us and always will be.** A lasso, a highlighter,
   a text-box drag — all are just the pen tip on glass. There is no evdev bit for "xochitl
   thinks this is a selection". The real fix is to **own the screen while capturing** (stop
