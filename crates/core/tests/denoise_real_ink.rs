@@ -34,3 +34,37 @@ fn strips_the_toolbar_taps_from_a_real_capture_and_keeps_every_symbol() {
         );
     }
 }
+
+/// `radical_over_expression.ink` is a real capture of a hand-drawn `√x+1`, written the way
+/// it is printed: the tick on the left, the overbar spanning right, and `x + 1` tucked
+/// underneath. That makes the radical's bounding box *enclose* its contents — and
+/// bbox-based clustering merged all six strokes into one "symbol", which the classifier
+/// then read as `\mathscr{F}` at 13.9%. `\sqrt` was broken end-to-end, while all 17
+/// structure tests passed, because those hand-feed positioned symbols and never touch
+/// segmentation.
+#[test]
+fn a_real_hand_drawn_radical_does_not_swallow_its_contents() {
+    use ink2tex_core::segment::segment;
+
+    let bytes = include_bytes!("data/radical_over_expression.ink");
+    let ink = Ink::decode(bytes).expect("decode radical_over_expression.ink");
+    assert_eq!(ink.strokes.len(), 6, "fixture: √ + x(2 strokes) + +(2) + 1");
+
+    let groups = segment(&ink.strokes);
+    assert_eq!(
+        groups.len(),
+        4,
+        "√, x, +, 1 — got {} group(s): {groups:?}",
+        groups.len()
+    );
+    // The radical must be alone: it is stroke 0 and it must not have absorbed anything.
+    let radical = groups
+        .iter()
+        .find(|g| g.contains(&0))
+        .expect("stroke 0 (the radical) is in some group");
+    assert_eq!(
+        radical.len(),
+        1,
+        "the radical dragged strokes in with it: {radical:?}"
+    );
+}

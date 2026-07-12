@@ -84,12 +84,44 @@ alone would have deleted it. Only the conjunction is safe.
 Tested against the real capture (`crates/core/tests/data/noisy_row.ink`), not just
 synthetics — 8 strokes in, the right 5 out.
 
-**And a claim to re-test, not to trust:** segmentation *did* merge 7 of 9 strokes when one
-stroke enclosed the rest, and `core::segment` clusters by 2-D proximity, so an enveloping
-stroke absorbing its neighbours is a real property of the algorithm. But the enveloping
-stroke here was a lasso, not notation — so this is **not** evidence that a large radical or
-tall parens break it. That still needs an honest test. (DESIGN §4.2's hypothesis lattice is
-owed regardless.)
+### 🐛 The enveloping-stroke claim: tested properly, TRUE, and fixed
+
+I had written that segmentation "collapses when one stroke envelops the others" and
+generalized it to radicals, tall parens and fraction bars — on the strength of a *lasso*,
+which is not notation. Tested honestly:
+
+`core::segment` clustered on **bounding-box** gap, which is `0` whenever one box contains
+another. So an enveloping stroke merged its neighbours **at any threshold** — not tunable,
+structural. And it bites real notation: a `√` drawn the way it is printed (tick left, overbar
+spanning right, contents tucked under the bar) *encloses* its contents. On a real capture of
+`√x+1`, **all 6 strokes collapsed into one "symbol"** and the classifier — handed a whole
+expression as one glyph — answered `\mathscr{F}` at 13.9%.
+
+**`\sqrt` was broken end-to-end while all 17 structure tests passed**, because those tests
+hand-feed `structure::parse` positioned symbols and never touch segmentation. That is the gap
+between "the tests pass" and "it works".
+
+Fixed: cluster on **ink**, not on boxes (`segment::ink_within`). The radical's *box* encloses
+`x+1`, but its *ink* is 0.0298 away against a 0.0143 threshold, so it now separates — while
+the crossing strokes of an `x` (0.0007 apart) still merge. Segment-to-segment, not
+point-to-point: two strokes can genuinely cross with every *sample* far from every other, and
+an `x` dashed off in a few samples would shatter. Real capture now segments to 4 symbols and
+emits `\sqrt{}`.
+
+⚠️ **Performance was a trap here.** The per-stroke bbox test is worthless in exactly the case
+`ink_within` exists for, so every O(segments²) pair got walked: 18 ms for the `√`, **107 ms**
+for the lasso page — on x86, against a 50 ms budget on a much slower CPU. Rejecting each
+*segment* pair by its own bbox first brought it to 1.0 ms / 5.1 ms.
+
+**Still open, and honestly labelled:**
+- **`structure` does not nest the contents into the radical.** It now gets a separate `√`
+  symbol and emits `\sqrt{}\times\rightarrow\rceil` — the radical is recognized but `x+1`
+  is a *sibling*, not its argument. Segmentation was necessary, not sufficient.
+- **Tall parens still over-merge their contents** — a different mechanism (the threshold is
+  `0.25 × median stroke size`, and tall parens *are* the big strokes, so they inflate it).
+  Synthetic evidence only — and this session is a lesson in not trusting that: my first
+  "radical" capture didn't even reproduce the bug because the contents weren't under the bar.
+  Needs the same real-ink test the radical got.
 
 
 **M1's accuracy gate is MET on the full corpus — and a bug that would have broken the
