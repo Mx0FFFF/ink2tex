@@ -141,14 +141,23 @@ The one lingering **M0** item is rm2fb for on-screen *inking* (recognition doesn
   probabilities to the last decimal. So the int8 kernel is arch-consistent, and the
   preprocessing contract now holds on *both* sides of the wire. **Both M1 done-criteria are
   met.** SSH is key-based now (`~/.ssh/id_ed25519_rm`), so device targets run unattended.
-- **Next task:** **package for Toltec/Vellum and release it** — that is the whole of M1's
-  "★ SHIP THIS ★", and nothing technical is in the way. (An on-screen *result* display would
-  be nicer, but it needs the M4 typesetter; the SSH/stdout tool works today and shipping it
-  is the point — real users from month one is what breaks the "abandoned sample" curse.)
-  After that, the next accuracy lever is **model capacity, not data**: `fc1` is 64 units into
-  a 1,123-way softmax, the train/val gap is down to 0.7 points, and there is ~34 ms of the
-  50 ms inference budget unspent.
-- **Blocked on:** nothing.
+- **✅ Packaged for Toltec (2026-07-12).** `make ipk` → `ink2tex_0.1.0-1_rm2.ipk` (332 KB),
+  a well-formed opkg package; `packaging/toltec/ink2tex/package` is the recipe to submit.
+  **Verified by installing it on the tablet** (payload unpacked at `/opt` exactly as opkg
+  would): `ink2tex --recognize` with *no flags* found its own weights and answered in 17.7 ms;
+  then removed, leaving the device as it was. `installdepends` is empty — it needs no rm2fb
+  and no launcher, so it runs on a stock device with nothing but Toltec. The weights now
+  ship with their ODbL attribution, which is an obligation, not a courtesy.
+- **⛔ Next task — and it is YOUR decision, not a coding task: publish the source.** Toltec
+  builds recipes in a clean Docker image from a **public** source URL checked against a
+  sha256. This repo has no remote, so `source=` is a placeholder and `sha256sums=(SKIP)`.
+  Push it, tag `v0.1.0`, fill in those two lines, open a PR against `toltec-dev/toltec`
+  (`testing` branch). **That is the only thing left between here and M1 shipped.**
+  See `packaging/README.md`.
+- **After that**, the next accuracy lever is **model capacity, not data**: `fc1` is 64 units
+  into a 1,123-way softmax, the train/val gap is down to 0.7 points, and ~34 ms of the 50 ms
+  inference budget is unspent.
+- **Blocked on:** publishing the repo (above). Nothing code-side.
 
 <details><summary>Earlier sessions</summary>
 
@@ -224,7 +233,8 @@ Train a symbol classifier on Detexify's ODbL stroke data. Hand-rolled int8 CNN i
 > shape-group-held-out split of the full 210k corpus.
 > ✅ **Latency: met** — 15.6 ms/symbol mean on the armv7 Cortex-A7 (2026-07-12), with the
 > top-5 bit-identical to x86.
-> **Both gates are green. All that is left is to package it and release it.**
+> ✅ **Packaged** — `make ipk`; installed and run on the tablet from `/opt`.
+> **Every gate is green. `git push` is the last step, and it is a decision, not a task.**
 
 This is not a toy milestone. An offline symbol-lookup tool on e-ink doesn't exist and people want it. **Real users from month one is what breaks the "unmaintained experimental sample" curse** that killed every prior attempt at this. Ship before you're ready.
 
