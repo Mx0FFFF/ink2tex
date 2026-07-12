@@ -410,6 +410,23 @@ rather than one model's lucky string.
 splits at ~0.8 bar-widths against a 0.25 threshold, so every `=` read as `- -` before.
 Guards (width-ratio, x-overlap, bar-shape) each kill a real false positive; 3 tests.
 
+### 2026-07-13, later: +54 sevens +50 twos (both rescued), `2` fixed, `7` to rank 3
+
+The follow-up batch was drawn faster than the collector's idle gap (runs of 7s glued into
+4 samples) and — both times now — with the tablet held landscape. Both rescued at ingest:
+the quick-sheet clustering split the runs, visual check caught the rotation, and the
+collector now says "hold the tablet UPRIGHT" at startup. 487 device samples total.
+
+v5 on the real equation: **`2` 52% → 92.8%** (`\partial` crushed to 3.4%) and **`7` from
+1.4%/rank-5 to 13.8%/rank-3** — better, not flipped, and honestly so: compare the ink. The
+user's *collected* 7s have a long top bar and steep descender; the one in the equation is
+a wide-open angle that genuinely reads `>`. Ambiguous ink is the correction UI's job; the
+truth is one tap away at rank 3. Guards unchanged (radical2, row, corpus 13). On-device
+run matches x86 digit for digit, 574 ms.
+
+The expression model now lives at a **stable role name** — `train/expr.{iwt,labels,counts}`
+— so tests, Makefile and the device stop chasing version numbers every retrain.
+
 ### 🏆 2026-07-13: `2x + 3 = 7` → `2x+3=>` — the first full equation, end to end
 
 Drawn on the tablet, one line, real handwriting. **Five of six symbols top-1** (`2` 52%,

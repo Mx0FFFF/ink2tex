@@ -127,7 +127,7 @@ fn a_real_hand_drawn_radical_nests_its_contents() {
 #[test]
 fn vocabulary_entries_exist_in_the_label_space() {
     let root = workspace_root();
-    let path = root.join("train/labels_v4.txt");
+    let path = root.join("train/expr.labels.txt");
     if !path.exists() {
         eprintln!("skipping: {} missing", path.display());
         return;
@@ -152,7 +152,7 @@ fn vocabulary_entries_exist_in_the_label_space() {
 #[test]
 fn everyday_tokens_win_on_real_ink_in_expression_mode() {
     let root = workspace_root();
-    let model_path = root.join("train/model_v4.iwt");
+    let model_path = root.join("train/expr.iwt");
     if !model_path.exists() {
         eprintln!("skipping: {} missing", model_path.display());
         return;
@@ -160,9 +160,9 @@ fn everyday_tokens_win_on_real_ink_in_expression_mode() {
     let blob = std::fs::read(&model_path).expect("read model");
     let weights = Weights::parse(&blob).expect("parse");
     let labels = Labels::from_lines(
-        &std::fs::read_to_string(root.join("train/model_v4.labels.txt")).expect("labels"),
+        &std::fs::read_to_string(root.join("train/expr.labels.txt")).expect("labels"),
     );
-    let counts: Vec<u32> = std::fs::read_to_string(root.join("train/model_v4.counts.txt"))
+    let counts: Vec<u32> = std::fs::read_to_string(root.join("train/expr.counts.txt"))
         .expect("counts")
         .lines()
         .filter_map(|l| l.trim().parse().ok())
@@ -212,7 +212,7 @@ fn everyday_tokens_win_on_real_ink_in_expression_mode() {
 #[test]
 fn the_first_full_equation_2x_plus_3_equals_7() {
     let root = workspace_root();
-    let model_path = root.join("train/model_v4.iwt");
+    let model_path = root.join("train/expr.iwt");
     if !model_path.exists() {
         eprintln!("skipping: {} missing", model_path.display());
         return;
@@ -220,9 +220,9 @@ fn the_first_full_equation_2x_plus_3_equals_7() {
     let blob = std::fs::read(&model_path).expect("read model");
     let weights = Weights::parse(&blob).expect("parse");
     let labels = Labels::from_lines(
-        &std::fs::read_to_string(root.join("train/model_v4.labels.txt")).expect("labels"),
+        &std::fs::read_to_string(root.join("train/expr.labels.txt")).expect("labels"),
     );
-    let counts: Vec<u32> = std::fs::read_to_string(root.join("train/model_v4.counts.txt"))
+    let counts: Vec<u32> = std::fs::read_to_string(root.join("train/expr.counts.txt"))
         .expect("counts")
         .lines()
         .filter_map(|l| l.trim().parse().ok())
@@ -270,7 +270,7 @@ fn the_first_full_equation_2x_plus_3_equals_7() {
 #[test]
 fn a_landscape_equation_orients_itself() {
     let root = workspace_root();
-    let model_path = root.join("train/model_v4.iwt");
+    let model_path = root.join("train/expr.iwt");
     if !model_path.exists() {
         eprintln!("skipping: {} missing", model_path.display());
         return;
@@ -278,9 +278,9 @@ fn a_landscape_equation_orients_itself() {
     let blob = std::fs::read(&model_path).expect("read model");
     let weights = Weights::parse(&blob).expect("parse");
     let labels = Labels::from_lines(
-        &std::fs::read_to_string(root.join("train/model_v4.labels.txt")).expect("labels"),
+        &std::fs::read_to_string(root.join("train/expr.labels.txt")).expect("labels"),
     );
-    let counts: Vec<u32> = std::fs::read_to_string(root.join("train/model_v4.counts.txt"))
+    let counts: Vec<u32> = std::fs::read_to_string(root.join("train/expr.counts.txt"))
         .expect("counts")
         .lines()
         .filter_map(|l| l.trim().parse().ok())

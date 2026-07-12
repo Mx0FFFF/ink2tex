@@ -91,13 +91,13 @@ deploy-model:
 	scp $(MODEL) $(HOST):/home/root/model.iwt
 	scp $(LABELS) $(HOST):/home/root/model.labels.txt
 
-# Push the EXPRESSION model (v4: + collected device ink; has =, (, ), t, digits, letters)
+# Push the EXPRESSION model (train/expr.* — the stable role-name; retrains re-point it)
 # under the role-names the --expr mode looks for. Separate from the M1 lookup model on
 # purpose: the two modes answer different questions (DESIGN §4.3).
 deploy-expr:
-	scp train/model_v4.iwt $(HOST):/home/root/expr.iwt
-	scp train/model_v4.labels.txt $(HOST):/home/root/expr.labels.txt
-	scp train/model_v4.counts.txt $(HOST):/home/root/expr.counts.txt
+	scp train/expr.iwt $(HOST):/home/root/expr.iwt
+	scp train/expr.labels.txt $(HOST):/home/root/expr.labels.txt
+	scp train/expr.counts.txt $(HOST):/home/root/expr.counts.txt
 
 # Write a line of math on the tablet -> LaTeX in this terminal. All on-device compute.
 expr: deploy deploy-expr
