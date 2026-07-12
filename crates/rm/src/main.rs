@@ -5,6 +5,9 @@
 //!   --probe                        enumerate + ioctl-probe the digitizer, print ranges
 //!   --record [--out P] [--dur S]   read the pen, save strokes as .ink (no drawing)
 //!   --ink    [--out P] [--dur S]   same, but also draw live with a DU waveform (arm)
+//!   --collect --symbol S [--count N]
+//!                                  draw S repeatedly -> NDJSON training samples (the tokens
+//!                                  no permissively-licensed dataset has: `=`, `(`, `)`)
 //!   --recognize [--from INK | --dur S] [--model M] [--labels L]
 //!                                  draw (or load --from) a symbol → int8 CNN → top-5
 //!                                  LaTeX on stdout (streamed back over SSH; no rm2fb).
@@ -40,6 +43,7 @@ fn main() -> Result<()> {
         Some("--record") => record(&args),
         Some("--ink") => ink(&args),
         Some("--recognize") => recognize(&args),
+        Some("--collect") => collect(&args),
         Some("-h") | Some("--help") => {
             print_usage();
             Ok(())
@@ -64,6 +68,8 @@ fn print_usage() {
     eprintln!("  --probe                      find the digitizer, print its axis ranges");
     eprintln!("  --record  [--out P][--dur S]  capture pen strokes to an .ink file");
     eprintln!("  --ink     [--out P][--dur S]  capture AND draw live (device; needs rm2fb)");
+    eprintln!("  --collect --symbol S [--count N] [--out P] [--idle-ms MS]");
+    eprintln!("                               draw S over and over -> NDJSON training samples");
     eprintln!();
     eprintln!(
         "  --model M / --labels L       override the weights (default: /opt/usr/share/ink2tex,"
@@ -121,6 +127,167 @@ fn capture_args(args: &[String]) -> (String, Duration) {
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(60);
     (out, Duration::from_secs(secs))
+}
+
+/// Collect training samples for one symbol: draw it `--count` times, get NDJSON out.
+///
+/// ## Why this exists
+/// Detexify has no `+`, `-`, `=`, digits or letters — it is a symbol-*lookup* corpus, and
+/// nobody looks up how to type `2`. HWRT (ODbL) supplies 65 of the missing tokens, but
+/// **`=`, `(` and `)` are in no permissively-licensed dataset that exists**: they live only in
+/// CROHME and MathWriting, both CC BY-NC-SA, which must never enter a shipped binary. So the
+/// equals sign has to be drawn. This is the tool that draws it — and the seed of the open,
+/// permissively-licensed corpus DESIGN §5 argues does not yet exist and ought to.
+///
+/// Output is the same NDJSON the Detexify loader already eats, so collected ink feeds
+/// straight into `--prepare-detexify --classes` with no new format and no second parser to
+/// drift out of sync.
+///
+/// ## Systems concept: putting a *deadline* on a blocking read — and why `poll`, not `alarm`
+/// A sample ends when the pen goes **idle**, not when a stroke ends: `=` is two strokes with
+/// a short gap between them, `(` is one. So the loop has to ask "has anything happened in the
+/// last N ms?" — a question a blocking `read()` cannot answer, because it only wakes when the
+/// pen moves. `poll()` waits on the fd *with a timeout* and returns 0 when nothing arrived,
+/// which is exactly that question. (An `alarm`/`SIGALRM` would also interrupt the read — and
+/// see `run_capture` for how that goes wrong: `signal()` sets SA_RESTART and the read
+/// silently resumes. `poll` has no such trap.)
+fn collect(args: &[String]) -> Result<()> {
+    use std::io::Write as _;
+
+    let symbol = flag(args, "--symbol").context("--collect needs --symbol <latex>, e.g. '='")?;
+    let count: usize = flag(args, "--count")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50);
+    let out_path = flag(args, "--out").unwrap_or_else(|| "/home/root/collected.ndjson".to_string());
+    let idle_ms: u64 = flag(args, "--idle-ms")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1500);
+    let dev = device_arg(args);
+
+    let dig = match dev.as_deref() {
+        Some(p) => evdev::open_digitizer(p).with_context(|| format!("opening {p}"))?,
+        None => evdev::find_digitizer().context("locating the pen digitizer")?,
+    };
+
+    // SAFETY: the handler only does an atomic store. `sa_flags = 0` for the same reason as in
+    // `run_capture` — we want a syscall to fail rather than silently restart.
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = on_stop as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        libc::sigemptyset(&mut sa.sa_mask);
+        sa.sa_flags = 0;
+        for sig in [libc::SIGINT, libc::SIGTERM] {
+            libc::sigaction(sig, &sa, std::ptr::null_mut());
+        }
+    }
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&out_path)
+        .with_context(|| format!("opening {out_path}"))?;
+
+    eprintln!("collecting {count} samples of {symbol:?} → {out_path}");
+    eprintln!("draw it, lift the pen, wait {idle_ms} ms. Ctrl-C stops and keeps what you have.\n");
+
+    let mut saved = 0usize;
+    while saved < count && !STOP.load(Ordering::SeqCst) {
+        eprint!("  [{:>3}/{count}] draw  {symbol}  … ", saved + 1);
+        let _ = std::io::stderr().flush();
+
+        let ink = record_one(&dig, idle_ms)?;
+        if STOP.load(Ordering::SeqCst) {
+            eprintln!("(stopped)");
+            break;
+        }
+        if ink.strokes.is_empty() {
+            eprintln!("nothing captured — again");
+            continue;
+        }
+        writeln!(file, "{}", ndjson_sample(&symbol, &ink))?;
+        file.flush()?; // one at a time: a crash costs the last drawing, not the whole set
+        saved += 1;
+        eprintln!(
+            "✓ {} stroke(s) / {} points",
+            ink.strokes.len(),
+            ink.point_count()
+        );
+    }
+
+    eprintln!("\nwrote {saved} sample(s) of {symbol:?} to {out_path}");
+    Ok(())
+}
+
+/// Record until the pen has been idle for `idle_ms` — *after* something was actually drawn.
+fn record_one(dig: &evdev::Digitizer, idle_ms: u64) -> Result<Ink> {
+    let mut cap = capture::Capture::from_axes(dig.x, dig.y, dig.pressure, dig.tilt_x, dig.tilt_y);
+    let mut buf = [evdev::InputEvent::zeroed(); 64];
+    let mut last_ink: Option<std::time::Instant> = None;
+
+    loop {
+        if STOP.load(Ordering::SeqCst) {
+            break;
+        }
+        // Wake when the pen does something — or every 100 ms regardless, so the idle deadline
+        // still fires while the pen sits perfectly still and sends nothing at all.
+        let mut pfd = libc::pollfd {
+            fd: dig.fd.raw(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd and a plain millisecond timeout.
+        let ready = unsafe { libc::poll(&mut pfd, 1, 100) };
+        if ready < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                break; // Ctrl-C
+            }
+            return Err(e).context("poll on the digitizer");
+        }
+        if ready > 0 {
+            let n = match evdev::read_events(dig.fd.raw(), &mut buf) {
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => break,
+                Err(e) => return Err(e).context("reading pen events"),
+            };
+            for ev in &buf[..n] {
+                // A *latched point* — ink, not a hover. Hovering must not keep the sample
+                // alive, or the deadline never fires while a hand rests near the screen.
+                if cap.process(ev).is_some() {
+                    last_ink = Some(std::time::Instant::now());
+                }
+            }
+        }
+        if let Some(t) = last_ink {
+            if t.elapsed() >= std::time::Duration::from_millis(idle_ms) {
+                break; // drawn, then quiet — that is one sample
+            }
+        }
+    }
+    Ok(cap.finish())
+}
+
+/// One NDJSON record in the exact shape `detexify.rs` already parses, so collected ink needs
+/// no new format and no second loader to drift out of sync with the first.
+///
+/// Coordinates are the normalized ones `Capture` emits; nothing downstream cares about scale
+/// any more (that is what made `global_features` dimensionless). `t` is milliseconds, which
+/// is the unit the loader expects.
+fn ndjson_sample(symbol: &str, ink: &Ink) -> String {
+    let strokes: Vec<String> = ink
+        .strokes
+        .iter()
+        .map(|s| {
+            let pts: Vec<String> = s
+                .points
+                .iter()
+                .map(|p| format!(r#"{{"x":{:.5},"y":{:.5},"t":{}}}"#, p.x, p.y, p.t_us / 1000))
+                .collect();
+            format!("[{}]", pts.join(","))
+        })
+        .collect();
+    let key = symbol.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(r#"{{"key":"{key}","strokes":[{}]}}"#, strokes.join(","))
 }
 
 /// Enumerate `/dev/input/event*`, find the pen digitizer by capability, and dump
