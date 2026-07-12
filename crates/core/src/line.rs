@@ -10,6 +10,7 @@ use crate::classify::{
     global_features, online_features, rasterize, recognize, Labels, Prediction, Weights,
     ONLINE_POINTS,
 };
+use crate::denoise::keep_indices;
 use crate::error::Result;
 use crate::latex::{symbol_command, to_latex};
 use crate::segment::segment;
@@ -25,15 +26,22 @@ pub struct LineSymbol {
 
 /// Segment `ink` into symbols and classify each, returning them left-to-right.
 pub fn recognize_line(ink: &Ink, weights: &Weights, k: usize) -> Result<Vec<LineSymbol>> {
+    // Stray taps first: we read the pen below xochitl, so a tap on its toolbar arrives as
+    // a tiny stroke, and without this `segment` calls it a symbol and `structure` makes it
+    // a superscript. `keep_indices` (not `denoise`) because `LineSymbol::strokes` must
+    // keep pointing at the *user's* strokes, not at a filtered copy they never saw.
+    let keep = keep_indices(&ink.strokes);
+    let kept: Vec<Stroke> = keep.iter().map(|&i| ink.strokes[i].clone()).collect();
+
     let mut out = Vec::new();
-    for group in segment(&ink.strokes) {
-        let strokes: Vec<Stroke> = group.iter().map(|&i| ink.strokes[i].clone()).collect();
+    for group in segment(&kept) {
+        let strokes: Vec<Stroke> = group.iter().map(|&i| kept[i].clone()).collect();
         let bitmap = rasterize(&strokes, 32);
         let feats = global_features(&strokes);
         let online = online_features(&strokes, ONLINE_POINTS);
         let predictions = recognize(weights, &bitmap, &feats, &online, 32, k)?;
         out.push(LineSymbol {
-            strokes: group,
+            strokes: group.iter().map(|&i| keep[i]).collect(), // back to original indices
             predictions,
         });
     }

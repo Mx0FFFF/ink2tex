@@ -51,6 +51,11 @@ struct Cli {
     #[arg(long, value_name = "INK")]
     raster: Option<PathBuf>,
 
+    /// Per-stroke geometry (size, duration, distance to its nearest neighbour) — the
+    /// numbers you need to tell a stray tap from a deliberate `\cdot`.
+    #[arg(long, value_name = "INK")]
+    strokes: Option<PathBuf>,
+
     /// Preprocess a Detexify JSON export into a training dataset directory. Rasterizes
     /// through the SAME core rasterizer inference uses, so there is no train/infer skew.
     /// Streams NDJSON (`-` = stdin), so a 1 GB bulk dump costs one sample of memory.
@@ -136,6 +141,10 @@ fn main() -> Result<()> {
             .classes
             .context("--export-corpus needs --classes <txt>")?;
         return export_corpus(&input, &out, &want);
+    }
+
+    if let Some(path) = cli.strokes {
+        return stroke_stats(&path);
     }
 
     if let Some(path) = cli.dump_weights {
@@ -541,6 +550,72 @@ fn for_each_sample(input: &Path, mut f: impl FnMut(&detexify::Sample) -> Result<
         std::fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
     for s in detexify::parse(&text)? {
         f(&s)?;
+    }
+    Ok(())
+}
+
+/// Per-stroke geometry, so a noise filter can be designed against numbers rather than
+/// vibes. The hard part is that a stray tap and a deliberate `\cdot` are *both* tiny —
+/// the thing that separates them is whether anything else is nearby.
+fn stroke_stats(path: &Path) -> Result<()> {
+    let ink = Ink::decode(&std::fs::read(path)?).context("decoding .ink")?;
+    let bbox = |s: &ink2tex_core::Stroke| {
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for p in &s.points {
+            x0 = x0.min(p.x);
+            y0 = y0.min(p.y);
+            x1 = x1.max(p.x);
+            y1 = y1.max(p.y);
+        }
+        (x0, y0, x1, y1)
+    };
+    let diag = |b: (f32, f32, f32, f32)| (b.2 - b.0).hypot(b.3 - b.1);
+    let boxes: Vec<_> = ink.strokes.iter().map(bbox).collect();
+    // Point-to-point, NOT bbox-to-bbox: a selection lasso has a bounding box that
+    // encloses the whole page, so bbox distance calls every stray tap "close to" it. What
+    // matters is how far the actual ink is.
+    let gap = |a: &ink2tex_core::Stroke, b: &ink2tex_core::Stroke| {
+        let mut best = f32::MAX;
+        for p in &a.points {
+            for q in &b.points {
+                best = best.min((p.x - q.x).hypot(p.y - q.y));
+            }
+        }
+        best
+    };
+    let diags: Vec<f32> = boxes.iter().map(|b| diag(*b)).collect();
+    let mut sorted = diags.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let median = sorted[sorted.len() / 2];
+
+    println!(
+        "{} strokes — median stroke diagonal {:.4}",
+        ink.strokes.len(),
+        median
+    );
+    println!(
+        "  {:>3}  {:>5}  {:>8}  {:>8}  {:>9}  {:>9}",
+        "#", "pts", "diag", "diag/med", "ms", "nearest"
+    );
+    for (i, s) in ink.strokes.iter().enumerate() {
+        let ms = s.points.last().map_or(0, |p| p.t_us) as f64 / 1000.0
+            - s.points.first().map_or(0, |p| p.t_us) as f64 / 1000.0;
+        let nearest = ink
+            .strokes
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, o)| gap(s, o))
+            .fold(f32::MAX, f32::min);
+        println!(
+            "  {:>3}  {:>5}  {:>8.4}  {:>8.2}  {:>9.0}  {:>9.4}",
+            i,
+            s.points.len(),
+            diags[i],
+            diags[i] / median.max(1e-6),
+            ms,
+            nearest
+        );
     }
     Ok(())
 }

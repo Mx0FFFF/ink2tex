@@ -65,8 +65,24 @@ Two consequences, one fixed and one owed:
   rm2fb M0 loose end matters more than it looked. Until then, `--recognize` should only be
   run with xochitl on a blank page and the pen tool selected.
 
-**Also owed: noise-stroke filtering.** Tiny dot-strokes (toolbar taps) become spurious
-symbols, and `structure` dutifully turns them into super/subscripts (`\infty^{\slash}`).
+✅ **Noise-stroke filtering — done (`core::denoise`).** The row of `α Σ Π √ ∞` used to come
+back as `\textordfeminine\sum\sqcap_{\slash_{\diagup}}\sqrt{}\infty^{\slash}`: three
+toolbar taps became symbols, and `structure` correctly made the off-baseline ones into
+sub/superscripts. It now returns `\textordfeminine\sum\sqcap\sqrt{}\infty` — 5 symbols,
+no phantom scripts.
+
+The naive filter would have been a **bug worse than the one it fixed**: "drop small strokes"
+deletes `\cdot`, the decimal point in `3.14`, and the dot of an `i`, all of which are exactly
+as small as a stray tap — and a deleted symbol can never be recovered by the correction UI,
+while a spurious one can be. What separates them is not size but **neighbours**: a `\cdot`
+sits between its operands; a tap sits alone. So a stroke goes only if it is *both* far
+smaller than the median stroke *and* isolated from every other stroke. Thresholds measured
+off real captures (`--strokes`), not guessed — and note the trap in the data: a hand-drawn
+`∞` was **more isolated (1.15 median-widths) than two of the taps (1.12)**, so isolation
+alone would have deleted it. Only the conjunction is safe.
+
+Tested against the real capture (`crates/core/tests/data/noisy_row.ink`), not just
+synthetics — 8 strokes in, the right 5 out.
 
 **And a claim to re-test, not to trust:** segmentation *did* merge 7 of 9 strokes when one
 stroke enclosed the rest, and `core::segment` clusters by 2-D proximity, so an enveloping

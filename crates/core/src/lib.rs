@@ -8,6 +8,7 @@
 //! (DESIGN.md §4) land in later milestones.
 
 pub mod classify;
+pub mod denoise;
 pub mod error;
 pub mod format;
 pub mod latex;
