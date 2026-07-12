@@ -41,7 +41,38 @@ pub fn symbol_command(label: &str) -> String {
     }
 }
 
+/// The classes detexify-next names by *spelling the glyph out*, and what they actually are.
+///
+/// `\ampersand` is not a LaTeX command. Neither is `\hash`, `\dollar` or `\bar:16socis`.
+/// These are not obscure corners either: the alias table in `detexify.rs` recovered **7,957
+/// samples** for exactly these classes, so the model predicts them regularly — and a user
+/// who pastes `\ampersand` into a document gets an error, not an `&`.
+const SPELLED_OUT: &[(&str, &str)] = &[
+    ("ampersand", "\\&"),
+    ("hash", "\\#"),
+    ("dollar", "\\$"),
+    ("percent", "\\%"),
+    ("underscore", "\\_"),
+    ("slash", "/"),
+    ("lbracket", "["),
+    ("rbracket", "]"),
+    ("exclamation-grave", "!`"),
+    ("dash-dash", "--"),
+    ("dash-dash-dash", "---"),
+    ("dash-dash-dash-dash", "----"),
+    ("not-equiv", "\\not\\equiv"),
+    ("not-approx", "\\not\\approx"),
+    ("not-sim", "\\not\\sim"),
+    ("not-simeq", "\\not\\simeq"),
+    // detexify-next gave the two vertical bars generated ids and named neither.
+    ("bar:16socis", "|"),
+    ("bar:1sa4fqg", "\\|"),
+];
+
 fn detexify_name_to_latex(name: &str) -> String {
+    if let Some((_, tex)) = SPELLED_OUT.iter().find(|(n, _)| *n == name) {
+        return tex.to_string();
+    }
     // e.g. "mathcal-lbrace-R-rbrace" → \mathcal{R}
     if let Some((cmd, rest)) = name.split_once("-lbrace-") {
         if let Some(arg) = rest.strip_suffix("-rbrace") {
@@ -54,17 +85,63 @@ fn detexify_name_to_latex(name: &str) -> String {
             return format!("\\{cmd}{{}}");
         }
     }
-    // a single latin letter or digit stays literal; anything else is a command name.
-    if name.len() == 1 && name.chars().all(|c| c.is_ascii_alphanumeric()) {
-        name.to_string()
-    } else {
-        format!("\\{name}")
-    }
+    // Everything still here is a Detexify symbolId's `name`, and every one of those is a
+    // **command** — the single-character ones included. `latex:latex2e:L` is `\L` (Ł), not
+    // the letter L; likewise `\O` `\P` `\S` `\l` `\o`. Those are the *only* six single-char
+    // classes Detexify has, and treating them as literals (as this used to) both mis-rendered
+    // them and put them on a collision course with the real letters HWRT now supplies.
+    //
+    // The letters and digits themselves never reach here: they are keyed by their literal
+    // LaTeX (`x`, `7`, `+`) and `symbol_command` passes those straight through.
+    format!("\\{name}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The HWRT tokens Detexify cannot express. They are keyed by their literal LaTeX
+    /// precisely so that they pass straight through — and so that they cannot collide with
+    /// Detexify's `latex:latex2e:L`, which is the *command* `\L` (Ł), not the letter.
+    #[test]
+    fn the_tokens_hwrt_contributes_render_as_themselves() {
+        for (label, want) in [
+            ("+", "+"),
+            ("-", "-"),
+            ("<", "<"),
+            (">", ">"),
+            ("0", "0"),
+            ("7", "7"),
+            ("x", "x"),
+            ("L", "L"),
+        ] {
+            assert_eq!(symbol_command(label), want, "token {label}");
+        }
+        // …and the six that would have collided stay the COMMANDS they always were.
+        // Merging the letter `L` onto this key would have poisoned the class with two
+        // different symbols — and rendering it as a bare `L` mis-typesets Ł.
+        assert_eq!(symbol_command("latex:latex2e:L"), "\\L"); // Ł, not the letter L
+        assert_eq!(symbol_command("latex:latex2e:o"), "\\o"); // ø, not the letter o
+    }
+
+    /// The spelled-out classes must emit LaTeX that actually compiles. `\ampersand` is not
+    /// a command, and these have 7,957 samples behind them, so the model really does say them.
+    #[test]
+    fn spelled_out_punctuation_emits_real_latex() {
+        for (label, want) in [
+            ("latex:latex2e:ampersand", "\\&"),
+            ("latex:latex2e:hash", "\\#"),
+            ("latex:latex2e:dollar", "\\$"),
+            ("latex:latex2e:percent", "\\%"),
+            ("latex:latex2e:underscore", "\\_"),
+            ("latex:latex2e:slash", "/"),
+            ("latex:latex2e:lbracket", "["),
+            ("latex:latex2e:not-equiv", "\\not\\equiv"),
+            ("latex:latex2e:bar:16socis", "|"),
+        ] {
+            assert_eq!(symbol_command(label), want, "{label} must typeset");
+        }
+    }
 
     #[test]
     fn clean_labels_pass_through() {

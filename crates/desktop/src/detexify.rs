@@ -223,7 +223,11 @@ fn point_from(p: &Value, t0: &mut Option<i64>) -> Option<Point> {
         (
             num(p.get("x")?)? as f32,
             num(p.get("y")?)? as f32,
-            p.get("t").and_then(num).unwrap_or(0.0) as i64,
+            // Detexify calls it `t`; HWRT/write-math calls it `time`. Same field.
+            p.get("t")
+                .or_else(|| p.get("time"))
+                .and_then(num)
+                .unwrap_or(0.0) as i64,
         )
     };
     let base = *t0.get_or_insert(t);
