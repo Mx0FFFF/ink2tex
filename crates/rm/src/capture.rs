@@ -12,7 +12,7 @@
 
 use crate::evdev::{
     AbsInfo, InputEvent, ABS_PRESSURE, ABS_TILT_X, ABS_TILT_Y, ABS_X, ABS_Y, BTN_TOOL_PEN,
-    BTN_TOUCH, EV_ABS, EV_KEY, EV_SYN, SYN_REPORT,
+    BTN_TOOL_RUBBER, BTN_TOUCH, EV_ABS, EV_KEY, EV_SYN, SYN_REPORT,
 };
 use crate::transform::Transform;
 use ink2tex_core::{Ink, Point, Stroke};
@@ -41,6 +41,11 @@ pub struct Capture {
     raw_tx: i32,
     raw_ty: i32,
     tip_down: bool,
+    /// The eraser end of the Marker is what's in range (`BTN_TOOL_RUBBER`). Erasing looks
+    /// identical to drawing on this bus — same `BTN_TOUCH`, same coordinate stream — so
+    /// this flag is the only thing standing between "the user rubbed something out" and
+    /// "the user drew a symbol".
+    eraser: bool,
     t0_us: Option<u64>,
     last_norm: Option<(f32, f32)>,
     stroke: Stroke,
@@ -68,6 +73,7 @@ impl Capture {
             raw_tx: 0,
             raw_ty: 0,
             tip_down: false,
+            eraser: false,
             t0_us: None,
             last_norm: None,
             stroke: Stroke::new(),
@@ -89,8 +95,20 @@ impl Capture {
                 }
                 None
             }
+            // Which END of the Marker is in range? The eraser emits `BTN_TOUCH` and a full
+            // coordinate stream exactly like the tip does, so without this the user's
+            // *erasing* is recorded as ink — and then handed to the classifier as if they
+            // had drawn it.
+            EV_KEY if ev.code == BTN_TOOL_RUBBER => {
+                self.eraser = ev.value != 0;
+                if self.eraser {
+                    self.tip_down = false;
+                    self.end_stroke(); // flipped mid-stroke: keep what was drawn, stop here
+                }
+                None
+            }
             EV_KEY if ev.code == BTN_TOUCH => {
-                let down = ev.value != 0;
+                let down = ev.value != 0 && !self.eraser; // erasing is not drawing
                 if !down {
                     self.end_stroke(); // tip lifted → finish the stroke
                 }
@@ -191,6 +209,54 @@ mod tests {
         c.process(&ev(EV_ABS, ABS_Y, y, us));
         c.process(&ev(EV_ABS, ABS_PRESSURE, p, us));
         c.process(&ev(EV_SYN, SYN_REPORT, 0, us))
+    }
+
+    /// Erasing is not drawing. The rM2 digitizer advertises `BTN_TOOL_RUBBER` (its KEY
+    /// bitmask has bit 0x141), and while the eraser is in range it still emits `BTN_TOUCH`
+    /// and a full coordinate stream — so a capture that only watches `BTN_TOUCH` silently
+    /// records the user rubbing something out, and then classifies it as a symbol.
+    #[test]
+    fn eraser_end_is_not_captured_as_ink() {
+        let mut c = cap();
+        c.process(&ev(EV_KEY, BTN_TOOL_RUBBER, 1, 0)); // pen flipped over
+        c.process(&ev(EV_KEY, BTN_TOUCH, 1, 0)); // eraser pressed to the glass
+        for i in 0..5 {
+            sample(
+                &mut c,
+                5000 + i * 100,
+                6000 + i * 100,
+                2000,
+                10_000 * i as i64,
+            );
+        }
+        c.process(&ev(EV_KEY, BTN_TOUCH, 0, 60_000));
+        assert!(c.finish().strokes.is_empty(), "erasing was recorded as ink");
+    }
+
+    /// …and the tip still works once the pen is flipped back.
+    #[test]
+    fn tip_still_draws_after_the_eraser_leaves_range() {
+        let mut c = cap();
+        c.process(&ev(EV_KEY, BTN_TOOL_RUBBER, 1, 0));
+        c.process(&ev(EV_KEY, BTN_TOUCH, 1, 0));
+        sample(&mut c, 5000, 6000, 2000, 0);
+        c.process(&ev(EV_KEY, BTN_TOUCH, 0, 10_000));
+        c.process(&ev(EV_KEY, BTN_TOOL_RUBBER, 0, 20_000)); // flipped back to the tip
+        c.process(&ev(EV_KEY, BTN_TOOL_PEN, 1, 20_000));
+        c.process(&ev(EV_KEY, BTN_TOUCH, 1, 20_000));
+        for i in 0..3 {
+            sample(
+                &mut c,
+                7000 + i * 100,
+                8000,
+                2000,
+                30_000 + 10_000 * i as i64,
+            );
+        }
+        c.process(&ev(EV_KEY, BTN_TOUCH, 0, 70_000));
+        let ink = c.finish();
+        assert_eq!(ink.strokes.len(), 1, "only the tip's stroke should survive");
+        assert_eq!(ink.strokes[0].points.len(), 3);
     }
 
     #[test]

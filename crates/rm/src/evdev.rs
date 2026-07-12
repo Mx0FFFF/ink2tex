@@ -60,6 +60,11 @@ pub const EV_ABS: u16 = 0x03;
 pub const SYN_REPORT: u16 = 0x00; // "one full sample is complete"
 
 pub const BTN_TOOL_PEN: u16 = 0x140; // pen entered detection range
+/// The *eraser* end of the Marker, in range. The rM2 digitizer really does report this —
+/// its `KEY` bitmask has bit 0x141 set — and while the eraser is what's in range, the
+/// kernel still emits `BTN_TOUCH` and a full stream of `ABS_X/Y/PRESSURE`. So a capture
+/// that only watches `BTN_TOUCH` records *erasing* as ink. Ask what tool is in range.
+pub const BTN_TOOL_RUBBER: u16 = 0x141;
 pub const BTN_TOUCH: u16 = 0x14a; // pen tip actually pressed to glass
 
 pub const ABS_X: u16 = 0x00;

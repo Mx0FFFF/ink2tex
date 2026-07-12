@@ -33,16 +33,38 @@ A hand-drawn row — `α Σ Π √ ∞` — captured on the device, segmented an
 **3/5 top-1, 5/5 top-3.** The misses are honest: a cursive α *is* shaped like `ª`/`ɑ`, and a
 square-cornered Π *is* `⊓`. This is the argument for the correction UI in one screenshot.
 
-Two real findings from it:
-- **Segmentation collapses when one stroke envelops the others.** Drawing the same symbols
-  inside a big circle merged 7 of 9 strokes into a single "symbol". `core::segment` clusters
-  by 2-D proximity, so a stroke whose bbox contains its neighbours absorbs them. A circle is
-  not real notation — but a large radical over an expression, tall parens, and a long
-  fraction bar all have this shape. This is the naive segmenter DESIGN §4.2 warned about;
-  the lattice is still owed.
-- **Stray dots become spurious symbols**, and `structure` then makes them super/subscripts
-  (`\infty^{\slash}`). Correct behaviour, garbage input: noise-stroke filtering is needed
-  before M4 gets a UI.
+### ⚠️ We capture the pen, not the *drawing* — xochitl's UI gestures come with it
+
+The first live run produced a baffling `\skull` / `\Frowny`, from a giant circle enclosing
+everything. That circle was never drawn: it was the user's **xochitl selection-lasso**, and
+the stray dots were **pen taps on xochitl's toolbar**. We read raw evdev, *below* xochitl, so
+we capture whatever the pen physically does — erasing, lassoing, tapping menus — and hand it
+to the classifier as ink. It cannot tell the difference, because at the digitizer level there
+*is* no difference.
+
+Two consequences, one fixed and one owed:
+
+- ✅ **The eraser end was captured as ink.** The rM2 digitizer really does advertise
+  `BTN_TOOL_RUBBER` (KEY bitmask bit `0x141`, verified on hardware), and while the eraser is
+  in range it still emits `BTN_TOUCH` and a full coordinate stream. `capture` only watched
+  `BTN_TOUCH`, so *rubbing something out was recorded as a stroke and then classified*. Now
+  gated on which tool is in range (2 tests).
+- ⛔ **Software tool modes are invisible to us and always will be.** A lasso, a highlighter,
+  a text-box drag — all are just the pen tip on glass. There is no evdev bit for "xochitl
+  thinks this is a selection". The real fix is to **own the screen while capturing** (stop
+  xochitl, or draw through rm2fb), which is what `--ink` already does — another reason the
+  rm2fb M0 loose end matters more than it looked. Until then, `--recognize` should only be
+  run with xochitl on a blank page and the pen tool selected.
+
+**Also owed: noise-stroke filtering.** Tiny dot-strokes (toolbar taps) become spurious
+symbols, and `structure` dutifully turns them into super/subscripts (`\infty^{\slash}`).
+
+**And a claim to re-test, not to trust:** segmentation *did* merge 7 of 9 strokes when one
+stroke enclosed the rest, and `core::segment` clusters by 2-D proximity, so an enveloping
+stroke absorbing its neighbours is a real property of the algorithm. But the enveloping
+stroke here was a lasso, not notation — so this is **not** evidence that a large radical or
+tall parens break it. That still needs an honest test. (DESIGN §4.2's hypothesis lattice is
+owed regardless.)
 
 
 **M1's accuracy gate is MET on the full corpus — and a bug that would have broken the
