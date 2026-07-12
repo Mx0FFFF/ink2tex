@@ -113,10 +113,17 @@ emits `\sqrt{}`.
 for the lasso page — on x86, against a 50 ms budget on a much slower CPU. Rejecting each
 *segment* pair by its own bbox first brought it to 1.0 ms / 5.1 ms.
 
+✅ **And the nesting, fixed too.** `structure` gated the radical on `is_sqrt(label)`, which
+matched `"\sqrt"` — **a string the classifier never emits.** Detexify keeps the same √ ink
+under *three* classes, and the model splits across them: on the real capture it said
+`\sqrt{}` 67.2%, `\textsurd` 30.3%, `\surd` 1.7%. So even a one-label gate would have failed
+silently a third of the time. That is the second half of how `\sqrt` stayed broken while 17
+structure tests passed: **the tests spoke LaTeX, and the classifier speaks Detexify.**
+
+    before   \sqrt{}\times\rightarrow\rceil     (contents as siblings)
+    after    \sqrt{\times\rightarrow\rceil}     (contents as the argument)
+
 **Still open, and honestly labelled:**
-- **`structure` does not nest the contents into the radical.** It now gets a separate `√`
-  symbol and emits `\sqrt{}\times\rightarrow\rceil` — the radical is recognized but `x+1`
-  is a *sibling*, not its argument. Segmentation was necessary, not sufficient.
 - **Tall parens still over-merge their contents** — a different mechanism (the threshold is
   `0.25 × median stroke size`, and tall parens *are* the big strokes, so they inflate it).
   Synthetic evidence only — and this session is a lesson in not trusting that: my first
@@ -324,6 +331,36 @@ The one lingering **M0** item is rm2fb for on-screen *inking* (recognition doesn
   tool** (the milestone that gets real users and breaks the "abandoned sample" curse).
 
 </details>
+
+---
+
+## ⛔ M2/M3 rest on a classifier that cannot say `+`, `-`, `=`, a digit, or a letter
+
+Discovered 2026-07-12 while fixing `\sqrt`: the hand-drawn `+` came back as `\rightarrow`,
+and it turns out the model **cannot** do better — those tokens are not in its output space.
+The 1,123-class Detexify vocabulary contains **no `+`, no `-`, no `=`, no digits, and no
+variable letters**. Its only six single-character classes are `L O P S l o`, which are the
+commands `\L \O \P \S \l \o` (Ł Ø ¶ § ł ø), not letters.
+
+That is not a bug in Detexify — it is what Detexify *is*. It is a **symbol-lookup** tool: you
+draw an exotic glyph and it tells you the command. Nobody looks up how to type `2`, `x` or
+`+`, so nobody ever drew one for it.
+
+**M1 is unaffected** — single-symbol lookup is exactly the thing Detexify is for, and it ships.
+
+**But M2's done-criterion is literally unachievable as written:** *">85% exact-match"* on
+expressions like `2x + 3 = 7` — a string in which **not one token exists in the vocabulary**.
+The segmentation and structure machinery is real and now works; it is naming the symbols that
+cannot. DESIGN §3 assumed "~120 classes (CROHME's 111 + extras)" — and CROHME *does* have
+digits, letters and operators. Detexify does not. The switch to Detexify (for the licence)
+silently dropped the alphabet.
+
+**So M2 needs a source of ink for the basic tokens, and it is a licensing decision, not a
+coding task.** CROHME has them but is evaluation-only here (NON-NEGOTIABLE #3). Options worth
+weighing: collect them ourselves (DESIGN §5 already argues an own corpus is strategically
+valuable, and ~40 classes × ~100 samples is a couple of evenings with the tablet we now have
+a working recorder for); or find a permissively-licensed online-handwriting set (UNIPEN,
+IAM-OnDB). **Decide this before building more of M2.**
 
 ---
 

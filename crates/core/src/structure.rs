@@ -132,8 +132,30 @@ fn is_bar_candidate(s: &Symbol) -> bool {
         || (s.bbox.h() > 1e-6 && s.bbox.w() / s.bbox.h() > 2.5)
 }
 
+/// Is this symbol the radical *glyph*?
+///
+/// It must accept **every label the classifier can emit for a `√`**, and there are three of
+/// them, because Detexify keeps the same glyph under three classes:
+///
+/// | class | `symbol_command` |
+/// |---|---|
+/// | `latex:latex2e:sqrt-lbrace-rbrace` | `\sqrt{}` |
+/// | `latex:textcomp:textsurd` | `\textsurd` |
+/// | `latex:latex2e:surd` | `\surd` |
+///
+/// They are indistinguishable ink, so the model splits its probability across them — on the
+/// corpus fixture it says `\sqrt{}` 65.8%, `\textsurd` 28.0%, `\surd` 3.7%. Matching only
+/// one would leave the radical unrecognized roughly a third of the time, *silently*: it
+/// would come out as a plain symbol with its contents dangling beside it rather than inside.
+///
+/// This is exactly how `\sqrt` came to be broken end-to-end while 17 structure tests passed
+/// — the tests said `"\\sqrt"`, and the classifier never says that. **A label gate here has
+/// to speak the classifier's vocabulary, not LaTeX's.**
 fn is_sqrt(label: &str) -> bool {
-    matches!(label, "\\sqrt" | "√" | "sqrt")
+    matches!(
+        label,
+        "\\sqrt" | "\\sqrt{}" | "\\surd" | "\\textsurd" | "√" | "sqrt"
+    )
 }
 
 /// A composite construct found in the pool, with the indices it consumes.
@@ -465,6 +487,27 @@ mod tests {
             sym("c", 0.30, 0.60, 0.40, 0.75),
         ];
         assert_eq!(latex(&s), "\\frac{\\frac{a}{b}}{c}");
+    }
+
+    /// The other radical tests here all say `"\\sqrt"` — a label **the classifier never
+    /// emits**. That is how `\sqrt` stayed broken end-to-end while every one of them passed.
+    /// This pins the vocabulary the classifier actually speaks.
+    #[test]
+    fn the_radical_labels_the_classifier_actually_emits_are_recognized() {
+        // On a real capture the model said: \sqrt{} 67.2%, \textsurd 30.3%, \surd 1.7%.
+        // All three are the same ink. Miss any one and the radical silently degrades into a
+        // plain symbol with its contents dangling beside it instead of inside it.
+        for label in ["\\sqrt{}", "\\textsurd", "\\surd", "\\sqrt"] {
+            let out = latex(&[
+                sym(label, 0.00, 0.20, 0.75, 0.80),
+                sym("a", 0.25, 0.40, 0.45, 0.60),
+                sym("b", 0.45, 0.40, 0.65, 0.60),
+            ]);
+            assert_eq!(
+                out, "\\sqrt{ab}",
+                "{label} was not treated as a radical — its contents fell outside it"
+            );
+        }
     }
 
     #[test]

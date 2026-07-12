@@ -83,3 +83,39 @@ fn file_name(p: &Path) -> String {
         .unwrap_or("?")
         .to_string()
 }
+
+/// `\sqrt` end-to-end, on real ink — the thing 17 passing structure tests did not check.
+///
+/// The structure tests hand `structure::parse` pre-positioned symbols labelled `"\sqrt"`,
+/// a string **the classifier never emits** (it says `\sqrt{}`, `\textsurd` or `\surd`,
+/// splitting its probability across all three). And they never touch segmentation, which
+/// used to merge the radical with its own contents. Both bugs were invisible to them.
+///
+/// This drives the whole pipeline — ink → denoise → segment → classify → structure → LaTeX —
+/// over a real capture of a hand-drawn `√x+1`, and only asks the one thing that matters:
+/// the contents ended up *inside* the radical.
+#[test]
+fn a_real_hand_drawn_radical_nests_its_contents() {
+    let root = workspace_root();
+    let model_path = root.join("train/model.iwt");
+    if !model_path.exists() {
+        eprintln!("skipping: {} missing", model_path.display());
+        return;
+    }
+    let blob = std::fs::read(&model_path).expect("read model");
+    let weights = Weights::parse(&blob).expect("parse");
+    let labels = Labels::from_lines(
+        &std::fs::read_to_string(root.join("train/model.labels.txt")).expect("labels"),
+    );
+    let ink = Ink::decode(
+        &std::fs::read(root.join("crates/core/tests/data/radical_over_expression.ink"))
+            .expect("read fixture"),
+    )
+    .expect("decode");
+
+    let out = ink2tex_core::recognize_expression(&ink, &weights, &labels, 3).expect("recognize");
+    assert!(
+        out.starts_with("\\sqrt{") && out.len() > "\\sqrt{}".len(),
+        "the radical did not take its contents as an argument: {out:?}"
+    );
+}
