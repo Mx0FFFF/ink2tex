@@ -193,7 +193,11 @@ fn collect(args: &[String]) -> Result<()> {
         .with_context(|| format!("opening {out_path}"))?;
 
     eprintln!("collecting {count} samples of {symbol:?} → {out_path}");
-    eprintln!("draw it, lift the pen, wait {idle_ms} ms. Ctrl-C stops and keeps what you have.\n");
+    eprintln!("draw it, lift the pen, wait {idle_ms} ms. Ctrl-C stops and keeps what you have.");
+    // Samples are stored as-drawn, and a lone glyph cannot orient itself (the expression
+    // path's ballot needs a line of them). Both real collection sessions so far were
+    // drawn landscape and needed rescue-rotation at ingest — say it up front instead.
+    eprintln!("⚠ hold the tablet UPRIGHT (portrait). Landscape samples train a sideways model.\n");
 
     let mut saved = 0usize;
     while saved < count && !STOP.load(Ordering::SeqCst) {
