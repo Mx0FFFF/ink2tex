@@ -124,26 +124,31 @@ The exported `train/model.iwt` runs through the hand-rolled int8 kernel in Rust
 --recognize` (`make recognize`) rasterizes captured ink → int8 CNN → top-5 LaTeX on
 stdout (streamed over SSH, so **no rm2fb needed**), and the armv7 Cortex-A7 produced
 the **bit-identical** top-5 to x86 — the quantized math is arch-consistent, at
-**~18 ms/symbol** (M1's `<50 ms` inference criterion, met). A **live draw-to-recognize**
-on the tablet worked end-to-end. ⚠️ That device run predates the `global_features` fix
-and the retrained model — the code path is unchanged, but **re-verify it on hardware**
-(`make deploy-model && make recognize`) before calling M1 shipped.
-Remaining to ship M1: deploy + re-verify on device (above); on-screen result display
-(needs the M4 typesetter); package for Toltec/Vellum.
+**15.6 ms/symbol** (M1's `<50 ms` inference criterion, met) — **re-verified 2026-07-12 with
+the full-corpus model and the fixed features**, still bit-identical to x86. A **live
+draw-to-recognize** on the tablet worked end-to-end.
+Remaining to ship M1: **package for Toltec/Vellum**. (An on-screen *result* display needs
+the M4 typesetter; the stdout-over-SSH tool works today.)
 The one lingering **M0** item is rm2fb for on-screen *inking* (recognition doesn't need it).
 
 - **Last session:** 2026-07-12 — the full 210k Detexify corpus (see "Current state"), the
   `global_features` scale-invariance bug, the shape-group split, and the corpus suite
   1 → 13. The shipped model is retrained; `train/model.iwt` is the full-corpus one and its
   labels are byte-identical to the previous file.
-- **Next task:** **deploy + re-verify on hardware** — `make deploy-model && make recognize`,
-  draw a symbol, confirm the top-5 is sane. The features and the model both changed this
-  session; the on-device run in the M1 notes predates both. That is the last thing between
-  here and *shipping M1* (then: package for Toltec/Vellum). After that, the next accuracy
-  lever is **model capacity, not data** — `fc1` is 64 units into a 1,123-way softmax and the
-  train/val gap is down to 0.7 points, with inference budget to spare (~18 ms of 50 ms).
-- **Blocked on:** nothing. (The device is at `10.11.99.1` over USB; on-screen `--ink` still
-  needs rm2fb installed, but recognition does not.)
+- **✅ Deployed and verified on hardware (2026-07-12).** The full-corpus model + the fixed
+  features run on the tablet: **mean 15.6 ms/symbol** (max 17.8, n=9 — M1's `<50 ms` met with
+  3× headroom), and the armv7 top-5 is **bit-identical to x86** across 3 symbols,
+  probabilities to the last decimal. So the int8 kernel is arch-consistent, and the
+  preprocessing contract now holds on *both* sides of the wire. **Both M1 done-criteria are
+  met.** SSH is key-based now (`~/.ssh/id_ed25519_rm`), so device targets run unattended.
+- **Next task:** **package for Toltec/Vellum and release it** — that is the whole of M1's
+  "★ SHIP THIS ★", and nothing technical is in the way. (An on-screen *result* display would
+  be nicer, but it needs the M4 typesetter; the SSH/stdout tool works today and shipping it
+  is the point — real users from month one is what breaks the "abandoned sample" curse.)
+  After that, the next accuracy lever is **model capacity, not data**: `fc1` is 64 units into
+  a 1,123-way softmax, the train/val gap is down to 0.7 points, and there is ~34 ms of the
+  50 ms inference budget unspent.
+- **Blocked on:** nothing.
 
 <details><summary>Earlier sessions</summary>
 
@@ -216,9 +221,10 @@ Train a symbol classifier on Detexify's ODbL stroke data. Hand-rolled int8 CNN i
 **Then package it for Toltec/Vellum and release it.**
 
 > ✅ **Accuracy: met** — 96.8% top-5 (85.9% macro) through the int8 kernel, on a
-> shape-group-held-out split of the full 210k corpus. ✅ **Latency: met** — ~18 ms/symbol
-> on the armv7 Cortex-A7. Remaining: re-verify on hardware after this session's model +
-> feature change, then package.
+> shape-group-held-out split of the full 210k corpus.
+> ✅ **Latency: met** — 15.6 ms/symbol mean on the armv7 Cortex-A7 (2026-07-12), with the
+> top-5 bit-identical to x86.
+> **Both gates are green. All that is left is to package it and release it.**
 
 This is not a toy milestone. An offline symbol-lookup tool on e-ink doesn't exist and people want it. **Real users from month one is what breaks the "unmaintained experimental sample" curse** that killed every prior attempt at this. Ship before you're ready.
 
