@@ -160,11 +160,29 @@ pub fn segment(strokes: &[Stroke]) -> Vec<Vec<usize>> {
         return Vec::new();
     }
 
-    // Merge threshold = a fraction of the median stroke size (its larger side).
+    // Merge threshold = a fraction of the median stroke size (its larger side) — taken
+    // over COMPACT strokes only. Line-like strokes (tall parentheses, bars, slashes) have
+    // a diagonal that measures their *length*, not the writing's symbol scale, and they
+    // can be a large share of the population: in a real-glyph `(x+1)`, the parens and the
+    // flagged `1` pushed the median from ~0.08 to 0.126 and the threshold to within 12%
+    // of a normal inter-symbol gap — one slightly-tight writer away from `x+` fusing into
+    // a single blob (which then classifies as `\aleph`, of all things). Compact strokes
+    // measure the x-height; the exotic shapes get to *use* the threshold, not set it.
     let mut sizes: Vec<f32> = items
         .iter()
+        .filter(|(_, b)| {
+            let (w, h) = (b[2] - b[0], b[3] - b[1]);
+            w.max(h) / w.min(h).max(1e-6) <= 2.5
+        })
         .map(|(_, b)| (b[2] - b[0]).max(b[3] - b[1]))
         .collect();
+    if sizes.is_empty() {
+        // Nothing compact (a lone `=`, a page of slashes): fall back to every stroke.
+        sizes = items
+            .iter()
+            .map(|(_, b)| (b[2] - b[0]).max(b[3] - b[1]))
+            .collect();
+    }
     sizes.sort_by(|a, c| a.partial_cmp(c).unwrap_or(core::cmp::Ordering::Equal));
     let thresh = 0.25 * sizes[sizes.len() / 2].max(1e-6);
 

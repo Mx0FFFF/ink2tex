@@ -298,3 +298,41 @@ fn a_landscape_equation_orients_itself() {
         "landscape ink did not orient itself: {latex:?}"
     );
 }
+
+/// `(x+1)` composited from REAL collected glyphs (device ink; only the layout is
+/// synthetic), spaced like a tight writer — gaps ≈ 0.3 x-heights. This is the tall-paren
+/// case: line-like strokes (parens, the flagged 1) used to inflate the median stroke
+/// size that sets the merge threshold, and `x+` fused into one blob that classified as
+/// `\aleph`. The threshold's median is now taken over compact strokes only, and this
+/// fixture holds the line: five symbols, parens included, every glyph correct.
+#[test]
+fn tight_tall_parens_do_not_swallow_their_contents() {
+    let root = workspace_root();
+    let model_path = root.join("train/expr.iwt");
+    if !model_path.exists() {
+        eprintln!("skipping: {} missing", model_path.display());
+        return;
+    }
+    let blob = std::fs::read(&model_path).expect("read model");
+    let weights = Weights::parse(&blob).expect("parse");
+    let labels = Labels::from_lines(
+        &std::fs::read_to_string(root.join("train/expr.labels.txt")).expect("labels"),
+    );
+    let counts: Vec<u32> = std::fs::read_to_string(root.join("train/expr.counts.txt"))
+        .expect("counts")
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    let ink = Ink::decode(
+        &std::fs::read(root.join("crates/core/tests/data/parens_tight_composite.ink"))
+            .expect("fixture"),
+    )
+    .expect("decode");
+
+    let latex = ink2tex_core::recognize_expression(&ink, &weights, &labels, Some(&counts), 3)
+        .expect("latex");
+    assert_eq!(
+        latex, "(x+1)",
+        "the tight-paren composite must parse exactly"
+    );
+}

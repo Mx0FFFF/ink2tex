@@ -123,8 +123,20 @@ structure tests passed: **the tests spoke LaTeX, and the classifier speaks Detex
     before   \sqrt{}\times\rightarrow\rceil     (contents as siblings)
     after    \sqrt{\times\rightarrow\rceil}     (contents as the argument)
 
+### ✅ Tall parens: closed with real-glyph evidence (2026-07-13)
+
+Composited `(x+1)` from REAL collected glyphs (device ink, synthetic layout only). The truth
+turned out subtler than the synthetic probe claimed: the parens themselves already survive
+(the ink-gap clustering bows around content), but line-like strokes — parens, the flagged
+`1` — **inflate the median stroke size** that sets the merge threshold, leaving a 12% margin
+between threshold and a normal inter-symbol gap. One tight writer later, `x+` fuses into a
+blob that classifies as `\aleph`. The threshold's median is now computed over **compact
+strokes only** (aspect ≤ 2.5; line-like shapes get to *use* the threshold, not set it), with
+a fall-back when nothing compact exists (a lone `=`). The tight composite (0.3 x-height
+gaps) is a fixture and parses exactly `(x+1)` — every glyph from the user's own corpus.
+
 **Still open, and honestly labelled:**
-- **Tall parens still over-merge their contents** — a different mechanism (the threshold is
+- **(previously here: tall parens — closed above)** — a different mechanism (the threshold is
   `0.25 × median stroke size`, and tall parens *are* the big strokes, so they inflate it).
   Synthetic evidence only — and this session is a lesson in not trusting that: my first
   "radical" capture didn't even reproduce the bug because the contents weren't under the bar.
