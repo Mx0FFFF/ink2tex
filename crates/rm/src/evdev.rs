@@ -17,7 +17,7 @@
 //!
 //! We never hardcode `event1`: numbering isn't stable across firmware. We
 //! enumerate and keep the device that advertises `BTN_TOOL_PEN` + `ABS_PRESSURE`
-//! (see `.claude/rules/device.md`).
+//! (see `docs/device.md`).
 
 use std::ffi::{CStr, CString};
 use std::io;
@@ -186,7 +186,7 @@ fn get_abs(fd: RawFd, axis: u16) -> io::Result<AbsInfo> {
 }
 
 /// A digitizer we found and probed. Ranges are read live via `EVIOCGABS` — no
-/// hardcoded lore (`.claude/rules/device.md` rule).
+/// hardcoded lore (`docs/device.md` rule).
 pub struct Digitizer {
     pub path: String,
     pub name: String,

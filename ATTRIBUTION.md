@@ -31,4 +31,4 @@ install. See `DESIGN.md` §5.
   reMarkable (MIT). Used only by `crates/rm`.
 
 There is deliberately **no ML runtime dependency**: the int8 inference kernel is
-hand-written (`crates/core/src/classify/`). See `CLAUDE.md`.
+hand-written (`crates/core/src/classify/`). See `docs/core-invariants.md`.

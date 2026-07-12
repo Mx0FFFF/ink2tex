@@ -1,4 +1,4 @@
-//! The corpus regression suite — the project's immune system (CLAUDE.md §4,
+//! The corpus regression suite — the project's immune system (docs/core-invariants.md,
 //! DESIGN.md §3). Every `tests/corpus/<name>.ink` must classify with its true label
 //! (`tests/corpus/<name>.expected.tex`) somewhere in the top-5. Drop a captured
 //! symbol + its expected LaTeX and it's covered forever; a code change that breaks

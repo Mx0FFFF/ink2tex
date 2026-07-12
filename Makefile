@@ -1,4 +1,4 @@
-# ink2tex — see CLAUDE.md for the contract. `make check-bans` is what CI runs.
+# ink2tex — see DESIGN.md and docs/core-invariants.md. `make check-bans` is what CI runs.
 CORE      := ink2tex-core
 HOST      ?= root@10.11.99.1
 RM_TARGET := armv7-unknown-linux-gnueabihf
@@ -81,7 +81,7 @@ record: deploy
 	scp $(HOST):/home/root/out.ink /tmp/out.ink && echo "view: make replay FILE=/tmp/out.ink"
 
 # Live inking: stop xochitl, draw with a fast DU waveform, restore xochitl after.
-# Needs rm2fb on the device. ⚠ BACK UP THE DEVICE FIRST (.claude/rules/device.md).
+# Needs rm2fb on the device. ⚠ BACK UP THE DEVICE FIRST (docs/device.md).
 run ink: deploy
 	ssh $(HOST) 'systemctl stop xochitl; $(RM_BIN) --ink --out /home/root/out.ink --dur $(DUR); systemctl start xochitl'
 	scp $(HOST):/home/root/out.ink /tmp/out.ink && echo "view: make replay FILE=/tmp/out.ink"

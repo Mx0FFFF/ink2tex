@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot DEVICE FACTS probe for the reMarkable (see .claude/rules/device.md).
+# One-shot DEVICE FACTS probe for the reMarkable (see docs/device.md).
 # Gathers everything the device.md table asks for in a single SSH session, then
 # you transcribe the answers into that table (it's committed + auto-loaded, so a
 # fact recorded once is free for every future session).
@@ -53,7 +53,7 @@ REMOTE
 echo "Probing $HOST ..." >&2
 if ssh_run "$PROBE" | tee "$OUT"; then
   echo >&2
-  echo "Raw output saved to $OUT. Transcribe answers into .claude/rules/device.md." >&2
+  echo "Raw output saved to $OUT. Transcribe answers into docs/device.md." >&2
 else
   echo "SSH failed. Check the password (Settings -> Help -> Copyrights and licenses) and USB link." >&2
   exit 1

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Core-purity guardrail (NON-NEGOTIABLE #2 / .claude/rules/core-purity.md).
+# Core-purity guardrail (NON-NEGOTIABLE #2 / docs/core-invariants.md).
 #
 # crates/core is the entire value of the project and must stay device-free: no
 # libremarkable, no /dev/input, no framebuffer, no GUI toolkit, no syscalls. It
@@ -38,7 +38,7 @@ for b in "${BANNED[@]}"; do
 done
 
 if [ "$violation" -ne 0 ]; then
-  echo "-> core must be device-free (see .claude/rules/core-purity.md)." >&2
+  echo "-> core must be device-free (see docs/core-invariants.md)." >&2
   exit 1
 fi
 echo "core-purity OK — ink2tex-core has no device/IO dependencies."

@@ -1,7 +1,7 @@
 //! Digitizer → normalized-screen coordinate transform. This is the *one* place
 //! that knows the pen's raw axis geometry; everything downstream lives in
 //! normalized [0,1] screen space (x→right, y→down), which is what
-//! `ink2tex_core::Point` stores. (`.claude/rules/device.md`: "Get the transform
+//! `ink2tex_core::Point` stores. (`docs/device.md`: "Get the transform
 //! right once, in one function, and unit-test it against known corners.")
 //!
 //! ## Systems concept: coordinate spaces
@@ -65,7 +65,7 @@ mod tests {
     }
 
     // Representative rM2 ranges; the real ones come from `ink2tex-rm --probe` and
-    // are recorded in .claude/rules/device.md. The mapping math is range-agnostic.
+    // are recorded in docs/device.md. The mapping math is range-agnostic.
     fn rm2() -> Transform {
         Transform::new(ax(0, 20966), ax(0, 15725))
     }

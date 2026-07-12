@@ -424,7 +424,7 @@ fn prepare_detexify(
 
 /// Mint `tests/corpus` fixtures from a Detexify export — one case per class in `want`.
 ///
-/// The corpus suite is the project's immune system (CLAUDE.md §4), and it was guarding
+/// The corpus suite is the project's immune system (docs/core-invariants.md), and it was guarding
 /// the entire classifier with a *single* case. Detexify is real human handwriting, so its
 /// samples make honest fixtures: any regression in the preprocessing contract, the int8
 /// kernel, or the label space breaks them instantly. (This is exactly how the scale-

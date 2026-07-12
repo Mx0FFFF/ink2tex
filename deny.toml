@@ -1,4 +1,4 @@
-# cargo-deny — enforces NON-NEGOTIABLE #1 (CLAUDE.md / DESIGN.md §3):
+# cargo-deny — enforces NON-NEGOTIABLE #1 (docs/core-invariants.md / DESIGN.md §3):
 #   NEVER add an ML runtime dependency. The hand-rolled int8 kernel IS the project.
 # CI runs `cargo deny check bans`; so does `make check-bans`.
 

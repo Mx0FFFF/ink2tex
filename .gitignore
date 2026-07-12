@@ -18,3 +18,7 @@ __pycache__/
 # model for the tests/corpus regression suite (small; also lets `make recognize`
 # work straight from a clone).
 # NOTE: Cargo.lock IS committed — this workspace produces binaries.
+
+# local agent config — not part of the published project
+/CLAUDE.md
+/.claude/

@@ -57,7 +57,7 @@ Description: Recognize handwritten math symbols and get the LaTeX command — on
  /opt/usr/share/ink2tex/ATTRIBUTION.md).
 Section: math
 Priority: optional
-Maintainer: Mx0FFFF <Mx0FFFF@users.noreply.github.com>
+Maintainer: Mx0FFFF <mx0ffffff@gmail.com>
 License: MIT
 Architecture: $ARCH
 Homepage: https://github.com/Mx0FFFF/ink2tex

@@ -1,7 +1,7 @@
 //! ink2tex-core — the device-free recognizer. Everything here builds and tests
 //! on a laptop (`cargo test -p ink2tex-core`): no libremarkable, no `/dev/input`,
 //! no framebuffer. The digitizer->screen transform lives in `crates/rm`, not here
-//! (see `.claude/rules/core-purity.md`).
+//! (see `docs/core-invariants.md`).
 //!
 //! M0 ships the ink data model (`Point` / `Stroke` / `Ink`) and the `.ink`
 //! container format. The segmentation / classification / structure / latex stages

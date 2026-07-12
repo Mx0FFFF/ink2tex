@@ -1,6 +1,6 @@
 # Roadmap
 
-> This is the mutable plan. It lives here, **not** in `CLAUDE.md` — memory files shouldn't become fossils.
+> This is the mutable plan. It lives here, and it is kept honest — plans shouldn't become fossils.
 > **Update "Current state" at the end of every session.** That's how the next session knows where to pick up.
 
 ---
@@ -58,7 +58,7 @@ are concatenated to — epoch-0 loss was 125 where `ln(1123) ≈ 7`.)
 
 Features are now dimensionless (relative to the ink's own bbox) and bounded, with the
 invariance test that was missing. The invariant is written down in
-`.claude/rules/core-purity.md` — **if you add a feature, add its invariance test in the
+`docs/core-invariants.md` — **if you add a feature, add its invariance test in the
 same commit.** This also silently fixes M2/M3: `line.rs` computes features per *segmented
 symbol*, so `sx/sy` used to encode a symbol's absolute position in the expression.
 
@@ -178,7 +178,7 @@ The one lingering **M0** item is rm2fb for on-screen *inking* (recognition doesn
   xochitl).
 - **Device facts verified:** rows 1,2,3,5 ✅; row 3 orientation ✅; row 4 ✅ (rm2fb NOT
   installed → needed for `--ink`); row 6 ✅ (no `usb_f_hid`); row 7 (latency) pending the
-  on-screen `--ink` run. See `.claude/rules/device.md`.
+  on-screen `--ink` run. See `docs/device.md`.
 - **Done-criterion status:** headless (`make replay` → PNG) ✅; on-device **capture**
   ✅ (real handwriting, correct orientation); on-device **on-screen inking** built +
   cross-compiled, pending rm2fb install + latency check.

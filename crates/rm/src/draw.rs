@@ -10,7 +10,7 @@
 //! like a laggy mess. We draw each new segment, then fire an **async** DU refresh
 //! over just that segment's bounding box so the CPU never blocks on the panel.
 //!
-//! `.claude/rules/device.md`: on the rM2, `/dev/fb0` is not the logical display,
+//! `docs/device.md`: on the rM2, `/dev/fb0` is not the logical display,
 //! so this path relies on rm2fb / libremarkable's swtfb client to reach the EPDC.
 
 use libremarkable::framebuffer::cgmath::Point2;

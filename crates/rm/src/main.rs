@@ -1,5 +1,5 @@
 //! ink2tex-rm — the reMarkable 2 frontend. THE ONLY device-coupled code in the
-//! repo (~500 LOC ceiling; see `.claude/rules/device.md`).
+//! repo (~500 LOC ceiling; see `docs/device.md`).
 //!
 //! Modes:
 //!   --probe                        enumerate + ioctl-probe the digitizer, print ranges
