@@ -206,7 +206,33 @@ def split_by_group(gid, val_frac, seed=0):
     return np.where(~is_val)[0], np.where(is_val)[0]
 
 
-def train(model, X, O, F, y, gid, epochs, lr, val_frac, bs, n_classes, subsample=0):
+def class_weights(y_train, n_classes, mode):
+    r"""Per-class loss weights. **The default is not "balance the classes for tidiness" — it
+    is that this corpus's prior is actively backwards.**
+
+    Detexify is a symbol-*lookup* corpus: `\int` has 3,937 samples because people look it up,
+    and `+` had *zero* because nobody ever needs to. That frequency is close to the INVERSE of
+    what someone writing mathematics actually puts on the page. Trained unweighted, the model
+    learns that `\oplus` (1,251 samples) is fifteen times more likely than `+` (81) — and it
+    duly reads a hand-drawn plus as `\dashv`. It is not confused about the shape; every guess
+    it makes is plus-shaped. It is out-voted.
+
+    So weight each class by 1/sqrt(count): enough to stop the head drowning the tail, gentle
+    enough not to let a 50-sample class dictate the gradient. Classes with no data get 0.
+    """
+    import numpy as np
+
+    counts = np.bincount(y_train, minlength=n_classes).astype(np.float64)
+    if mode == "none":
+        return None
+    w = 1.0 / np.sqrt(np.maximum(counts, 1.0)) if mode == "sqrt" else 1.0 / np.maximum(counts, 1.0)
+    w[counts == 0] = 0.0
+    w *= len(w[counts > 0]) / w.sum()  # keep the loss on roughly its usual scale
+    return w
+
+
+def train(model, X, O, F, y, gid, epochs, lr, val_frac, bs, n_classes, subsample=0,
+          weighting="sqrt"):
     import torch
 
     tr, va = split_by_group(gid, val_frac)
@@ -228,7 +254,14 @@ def train(model, X, O, F, y, gid, epochs, lr, val_frac, bs, n_classes, subsample
 
     rng = np.random.default_rng(0)
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    loss_fn = torch.nn.CrossEntropyLoss()
+    w = class_weights(y[tr], n_classes, weighting)
+    if w is None:
+        loss_fn = torch.nn.CrossEntropyLoss()
+        print("class weighting: none (the head will drown the tail)", flush=True)
+    else:
+        loss_fn = torch.nn.CrossEntropyLoss(weight=torch.tensor(w, dtype=torch.float32))
+        print(f"class weighting: {weighting} — ratio of largest to smallest weight "
+              f"{w[w > 0].max() / w[w > 0].min():.1f}x", flush=True)
     best_val, best_state = -1.0, None
     for ep in range(epochs):
         model.train()
@@ -354,6 +387,8 @@ def main():
     ap.add_argument("--train-subsample", type=int, default=0, metavar="N",
                     help="train on only N rows of the train split (val untouched). Use this "
                          "to measure what more DATA buys, holding everything else fixed.")
+    ap.add_argument("--class-weight", choices=["none", "sqrt", "inverse"], default="sqrt",
+                    help="counter the corpus's backwards prior (see class_weights)")
     ap.add_argument("--dump-val", metavar="DIR",
                     help="write the held-out split here as a dataset dir, for --eval")
     args = ap.parse_args()
@@ -373,7 +408,7 @@ def main():
     gid = shape_groups(X, y)
     model = build_model(nf, len(classes), size)
     model, va = train(model, X, O, F, y, gid, args.epochs, args.lr, args.val_frac,
-                      args.batch_size, len(classes), args.train_subsample)
+                      args.batch_size, len(classes), args.train_subsample, args.class_weight)
     if args.dump_val:
         dump_val(args.dump_val, X, O, F, y, classes, va, size, nf)
     s_in = calibrate_input_scales(model, X, O, F)

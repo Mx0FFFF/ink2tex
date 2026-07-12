@@ -100,6 +100,12 @@ struct Cli {
     #[arg(long, value_name = "DATASET_DIR")]
     eval: Option<PathBuf>,
 
+    /// With --eval: also report classes `>= N` separately. New classes are appended to the
+    /// label space, so this isolates them — 65 tail classes of ~80 samples each vanish
+    /// completely into a 215k-sample average, and "did they learn at all?" is the question.
+    #[arg(long, value_name = "N")]
+    eval_split_at: Option<usize>,
+
     /// Recognize a linear expression: segment the `.ink` into symbols and classify
     /// each left-to-right (M2). Needs --model; --labels maps indices to commands.
     #[arg(long, value_name = "INK")]
@@ -242,7 +248,7 @@ fn main() -> Result<()> {
 
     if let Some(dir) = cli.eval {
         let model_path = cli.model.context("--eval needs --model <iwt>")?;
-        return eval_dataset(&dir, &model_path);
+        return eval_dataset(&dir, &model_path, cli.eval_split_at);
     }
 
     if let Some(path) = cli.raster {
@@ -647,7 +653,7 @@ fn join(it: impl Iterator<Item = String>) -> String {
 /// Run the int8 forward pass over a whole prepared dataset and report top-1/top-5
 /// accuracy vs. ground truth — the end-to-end check that on-device inference works
 /// and how much the int8 quantization costs vs. the float model.
-fn eval_dataset(dir: &Path, model_path: &Path) -> Result<()> {
+fn eval_dataset(dir: &Path, model_path: &Path, split_at: Option<usize>) -> Result<()> {
     let meta: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json"))?)
             .context("parsing meta.json")?;
@@ -722,6 +728,34 @@ fn eval_dataset(dir: &Path, model_path: &Path) -> Result<()> {
         pct(top1),
         pct(top5)
     );
+
+    // A tail of new classes is invisible in the average: 65 classes of ~80 samples each are
+    // 0.03% of a 215k corpus. Report them on their own or you cannot tell whether they
+    // learned anything at all.
+    if let Some(k) = split_at {
+        let band = |lo: usize, hi: usize, name: &str| {
+            let cs: Vec<usize> = (lo..hi.min(n_classes)).filter(|&c| cls_n[c] > 0).collect();
+            if cs.is_empty() {
+                return;
+            }
+            let n_s: usize = cs.iter().map(|&c| cls_n[c]).sum();
+            let h1: usize = cs.iter().map(|&c| cls_hit1[c]).sum();
+            let h5: usize = cs.iter().map(|&c| cls_hit5[c]).sum();
+            let macro5 = 100.0
+                * cs.iter()
+                    .map(|&c| cls_hit5[c] as f64 / cls_n[c] as f64)
+                    .sum::<f64>()
+                / cs.len() as f64;
+            println!(
+                "  {name:<28} {:>4} classes, {n_s:>6} samples — top-1 {:>5.1}%  top-5 {:>5.1}%  (macro top-5 {macro5:>5.1}%)",
+                cs.len(),
+                100.0 * h1 as f64 / n_s as f64,
+                100.0 * h5 as f64 / n_s as f64,
+            );
+        };
+        band(0, k, "existing (Detexify)");
+        band(k, n_classes, "NEW (HWRT: 0-9 a-z A-Z + - < >)");
+    }
 
     // Macro: average the per-class rates, over the classes this split actually contains.
     let present: Vec<usize> = (0..n_classes).filter(|&c| cls_n[c] > 0).collect();
