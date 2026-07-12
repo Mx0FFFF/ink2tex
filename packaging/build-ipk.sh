@@ -30,7 +30,7 @@ if [ ! -f "$BIN" ]; then
     echo "error: $BIN missing — run 'make build-rm' first" >&2
     exit 1
 fi
-for asset in train/model.iwt train/model.labels.txt ATTRIBUTION.md; do
+for asset in train/model.iwt train/model.labels.txt train/expr.iwt train/expr.labels.txt train/expr.counts.txt ATTRIBUTION.md; do
     [ -f "$asset" ] || { echo "error: $asset missing" >&2; exit 1; }
 done
 
@@ -42,6 +42,9 @@ PKGDIR="$OUT/pkg"
 install -D -m 755 "$BIN"                   "$PKGDIR/opt/bin/$PKG"
 install -D -m 644 train/model.iwt          "$PKGDIR/opt/usr/share/$PKG/model.iwt"
 install -D -m 644 train/model.labels.txt   "$PKGDIR/opt/usr/share/$PKG/model.labels.txt"
+install -D -m 644 train/expr.iwt           "$PKGDIR/opt/usr/share/$PKG/expr.iwt"
+install -D -m 644 train/expr.labels.txt    "$PKGDIR/opt/usr/share/$PKG/expr.labels.txt"
+install -D -m 644 train/expr.counts.txt    "$PKGDIR/opt/usr/share/$PKG/expr.counts.txt"
 install -D -m 644 ATTRIBUTION.md           "$PKGDIR/opt/usr/share/$PKG/ATTRIBUTION.md"
 
 SIZE=$(du -sb "$PKGDIR" | cut -f1)

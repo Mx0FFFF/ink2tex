@@ -21,6 +21,14 @@ it contains **no digits, no letters and no arithmetic operators**. HWRT supplies
 > Source: <https://doi.org/10.5281/zenodo.50022> · <https://github.com/MartinThoma/hwrt>
 > Licensed under the **Open Database License (ODbL) v1.0**.
 
+### 3. Our own corpus — 487 drawings, 11 classes
+
+The expression model additionally trains on ink collected on this project's own reMarkable
+(`train/collected/`, raw pages + extraction scripts included): the tokens **no public
+dataset has** — `=`, `(`, `)`, `t` — plus reinforcement for `1 2 7 x +`. It is our own
+work; no third-party obligation attaches. If it is ever published as a dataset, it will be
+ODbL like its siblings.
+
 ### What the licence requires of us
 
 The ODbL governs the *database*. A trained model is a **Produced Work** under ODbL §4.6 —
