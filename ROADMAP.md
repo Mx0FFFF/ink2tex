@@ -439,6 +439,33 @@ run matches x86 digit for digit, 574 ms.
 The expression model now lives at a **stable role name** — `train/expr.{iwt,labels,counts}`
 — so tests, Makefile and the device stop chasing version numbers every retrain.
 
+### 📊 2026-07-13: the first honest external benchmark — CROHME
+
+Evaluated with `train/eval_crohme.py` — the SAME `ink2tex-desktop` binary the device
+pipeline uses, no separate eval path to drift — on the two full competition test sets in
+the TC11 CROHME23 archive (no separate 2014 carve-out exists in it; these are the
+established equivalents):
+
+| test set | n | exact match (normalized) | symbol-bag F1 |
+|---|---|---|---|
+| CROHME 2016 test | 1,147 | **2.3%** | **46.6%** |
+| CROHME 2019 test | 1,199 | **3.6%** | **46.9%** |
+
+**Read it the way DESIGN §7 says to.** Exact match compounds: at ~47% symbol accuracy, an
+8-token expression passes whole only ~0.5% of the time by chance alone — the low headline
+is arithmetic, not news. The informative number is the symbol F1: roughly half of what
+CROHME's hundreds of writers put down is being found and named by a 172 KB int8 model and
+a v1 geometry parser. Known caps, in rough order of damage: multi-letter function names
+(`\sin` is three letters to us — CROHME writes it constantly), tokens outside the ~190-entry
+expression vocabulary, the v1 segmentation on dense real-world layouts, and script/fraction
+decisions from geometry rules alone (the §4.2 lattice and the relation MLP remain the
+roadmap for exactly this). GPU transformer SOTA on these sets is ~55–65% exact — and
+"beating CROHME SOTA" is in *Deliberately out of scope*.
+
+The gate asked for a number, not a vibe. This is the number, reproducibly:
+normalization documented in the harness and printed with every run; CROHME handled under
+its NC licence (evaluation only, never in the repo, never in training).
+
 ### 🏆 2026-07-13: `2x + 3 = 7` → `2x+3=>` — the first full equation, end to end
 
 Drawn on the tablet, one line, real handwriting. **Five of six symbols top-1** (`2` 52%,
