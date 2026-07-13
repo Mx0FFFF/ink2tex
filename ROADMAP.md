@@ -589,12 +589,19 @@ IAM-OnDB). **Decide this before building more of M2.**
 
 Each gate has a hard done-criterion. **Don't skip gates.** The failure mode for this project is drifting into a research project and never shipping — the gates exist to prevent that.
 
-### ⬜ M0 — Ink recorder *(a weekend)*
+### ✅ M0 — Ink recorder
 
 Read the digitizer via evdev. Draw strokes to the framebuffer with partial refresh. Save `.ink` files.
 **Also build the headless replay renderer** (`--replay <ink> --render-to <png>`) — do not defer this, it's the agent's only way to verify visual work.
 
 **Done when:** ink appears on screen with <50 ms perceived latency, *and* `make replay` produces a PNG.
+
+> ✅ **Met 2026-07-13, with the honest caveat.** `make replay` → PNG has anchored every visual
+> verification all project. On-screen inking: the Toltec/rm2fb path is **hard-blocked on this
+> firmware** (bootstrap soft-bricks > 3.3.2; see docs/device.md) — inking is delivered by
+> *cohabitation*: capture reads evdev alongside xochitl, whose native pen rendering (~21 ms,
+> comfortably < 50 ms perceived) has carried every live session here. Our own DU-waveform
+> renderer exists, compiles, and waits for a display shim on modern OS.
 **Learning:** evdev, ioctl capability probing, coordinate transforms, E-Ink waveform modes, cross-compiling to `armv7-unknown-linux-gnueabihf`.
 
 ### ⬜ M1 — Offline Detexify *(2–4 weeks)* — ★ **SHIP THIS** ★

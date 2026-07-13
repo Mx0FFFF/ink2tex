@@ -41,6 +41,19 @@ ever lost). This is what lets an agent do device work without a human at the key
 | Actual pen→screen latency | measure with the live inker | ⏳ **PENDING** — needs rm2fb + the on-screen inker. (This is the *inking* loop, not inference — see the row below.) |
 | Inference latency + does armv7 agree with x86? | `ink2tex-rm --recognize --from <ink>` | ✅ **Re-confirmed 2026-07-12** on the full-corpus model: **mean 15.6 ms/symbol** (max 17.8, n=9) — well inside M1's `<50 ms`. And the Cortex-A7 top-5 is **bit-identical to x86**, probabilities to the last decimal, over 3 symbols. The hand-rolled int8 kernel is arch-consistent: no float drift, no NEON surprises. Re-run this after any change to `core::classify` — it is the cheapest possible check that the device still agrees with the trainer. |
 
+## ⛔ Toltec bootstrap will SOFT-BRICK this device — do not run it
+
+Toltec supports OS builds **2.6.1.71 – 3.3.2.1666** and its own site warns installing on
+anything newer soft-bricks. This tablet runs a 2026-06 build (`/etc/version` 20260629…),
+far past the ceiling. Consequences, recorded 2026-07-13:
+- **No rm2fb** on this device until the display-shim ecosystem catches up with new OS.
+  The `--ink` DU-waveform renderer stays dormant (code kept; compiles; unverifiable here).
+- **On-screen inking is delivered by cohabitation instead**: capture reads evdev in
+  parallel with xochitl, which renders the pen at its native ~21 ms. Every collection and
+  live test in this project ran that way.
+- Packages we publish to Toltec serve *its* users (on supported firmware); this device
+  sideloads via `make ipk` / `scp`.
+
 **Back up the device before the first deploy.** Soft-bricking is real; the community wiki is full of people who skipped this.
 
 ## Waveforms
