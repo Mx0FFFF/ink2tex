@@ -478,10 +478,22 @@ fn baseline(mut units: Vec<Unit>) -> Slt {
             // scripts by noise alone — `\sin z` came back `s(^{*}n…` — and a same-size
             // glyph that merely rides high is a wobbly baseline, not an exponent.
             let script_sized = u.bbox.h() < 0.9 * base_box.h();
+            // A flat bar (minus, a lone `=` half) defeats both gates above: it is
+            // "script-sized" vacuously, and the margin — scaled by its hairline
+            // height — is no dead-zone at all. The first live subtraction parsed
+            // `2x^{-}…` from a minus drawn 0.003 ABOVE a small x's midline, i.e. a
+            // perfectly ordinary baseline minus. A bar carries no extremity
+            // information (its bottom IS its top IS its midline), so it may only
+            // become a script the way big-operator limits do: by clearing the
+            // base's vertical span outright — which is where a genuine exponent
+            // bar (x⁻) actually sits.
+            let flat_bar = u.bbox.h() < 0.35 * u.bbox.w();
+            let clears_top = u.bbox.max_y < base_box.min_y + 0.1 * base_box.h();
+            let clears_bottom = u.bbox.min_y > base_box.max_y - 0.1 * base_box.h();
             let above = u.bbox.max_y < base_box.cy() - margin
-                && (script_sized || u.bbox.max_y < base_box.min_y + 0.1 * base_box.h());
+                && (clears_top || (script_sized && !flat_bar));
             let below = u.bbox.min_y > base_box.cy() + margin
-                && (script_sized || u.bbox.min_y > base_box.max_y - 0.1 * base_box.h());
+                && (clears_bottom || (script_sized && !flat_bar));
             if above {
                 sup.push(u.clone());
                 j += 1;
@@ -545,6 +557,36 @@ mod tests {
             sym("i", 0.16, 0.55, 0.24, 0.80),
         ];
         assert_eq!(latex(&s), "x_{i}");
+    }
+
+    /// The first live subtraction, exact device bboxes: the minus (h = 0.001) sat
+    /// 0.003 ABOVE the small x's midline — a perfectly ordinary baseline minus —
+    /// but "script-sized" is vacuously true for a hairline bar and its own-height
+    /// margin was 0.0003, so it parsed as `2x^{-}…`. A flat bar must stay on the
+    /// baseline unless it clears the base's span outright.
+    #[test]
+    fn live_baseline_minus_is_not_an_exponent() {
+        let s = [
+            sym("2", 0.167, 0.322, 0.201, 0.350),
+            sym("x", 0.219, 0.333, 0.241, 0.352),
+            sym("-", 0.274, 0.339, 0.295, 0.340),
+            sym("5", 0.329, 0.322, 0.354, 0.351),
+            sym("x", 0.355, 0.335, 0.378, 0.352),
+            sym("=", 0.405, 0.328, 0.442, 0.343),
+            sym("8", 0.480, 0.315, 0.509, 0.346),
+            sym("0", 0.519, 0.317, 0.546, 0.343),
+        ];
+        assert_eq!(latex(&s), "2x-5x=80");
+    }
+
+    /// …but a bar that genuinely clears the base's top is still an exponent (x⁻).
+    #[test]
+    fn a_bar_above_the_base_is_still_a_superscript() {
+        let s = [
+            sym("x", 0.219, 0.333, 0.241, 0.352),
+            sym("-", 0.245, 0.328, 0.260, 0.329), // wholly above x's top edge
+        ];
+        assert_eq!(latex(&s), "x^{-}");
     }
 
     #[test]

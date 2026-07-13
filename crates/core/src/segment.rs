@@ -15,6 +15,11 @@
 
 use crate::stroke::Stroke;
 
+/// Strokes whose x-projections are disjoint get only this fraction of the merge
+/// threshold — side-by-side strokes must nearly touch to be one symbol (see the
+/// union loop in `segment` for the measured rationale).
+const SIDE_BY_SIDE_TOUCH: f32 = 0.35;
+
 /// `[min_x, min_y, max_x, max_y]`.
 type Bbox = [f32; 4];
 
@@ -194,10 +199,27 @@ pub fn segment(strokes: &[Stroke]) -> Vec<Vec<usize>> {
     let mut parent: Vec<usize> = (0..n).collect();
     for a in 0..n {
         for b in (a + 1)..n {
-            if gap(&items[a].1, &items[b].1) >= thresh {
+            // Strokes that are DISJOINT in x must nearly touch to merge; only
+            // x-overlapping strokes get the full threshold. This is why handwriting
+            // is segmentable at all: symbols advance horizontally, so a genuine
+            // multi-stroke symbol overlaps itself in x (x's crossing, ='s stacked
+            // bars, t's crossbar, i's dot), while two neighbouring symbols do not.
+            // Measured on the first live subtraction: the `5x` product was written
+            // 0.0057 apart — inside the 0.0073 threshold, so it fused and read as
+            // `\ast` — with x-projection gaps of +0.002/+0.003; every real
+            // multi-stroke symbol on the same page overlapped by −0.015 or more.
+            // K-style arms that touch their stem (gap ≈ 0.0005) stay well inside
+            // the reduced allowance.
+            let x_gap = items[a].1[0].max(items[b].1[0]) - items[a].1[2].min(items[b].1[2]);
+            let allow = if x_gap > 0.0 {
+                SIDE_BY_SIDE_TOUCH * thresh
+            } else {
+                thresh
+            };
+            if gap(&items[a].1, &items[b].1) >= allow {
                 continue; // boxes too far ⇒ ink too far
             }
-            if ink_within(&strokes[items[a].0], &strokes[items[b].0], thresh) {
+            if ink_within(&strokes[items[a].0], &strokes[items[b].0], allow) {
                 let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
                 parent[ra] = rb;
             }
@@ -484,6 +506,59 @@ mod tests {
     fn two_separated_symbols_split() {
         let s = vec![boxed(0.00, 0.15, 0.40, 0.60), boxed(0.40, 0.55, 0.40, 0.60)];
         assert_eq!(segment(&s), vec![vec![0], vec![1]]);
+    }
+
+    /// The first live subtraction, verbatim: `2x - 5x = 80` written on device,
+    /// subsampled but with every stroke's endpoints, bbox extremes and closest-approach
+    /// points kept EXACT. The `5` and the second `x` sit 0.0057 apart — inside the
+    /// 0.0073 distance threshold — and fused into one blob that classified as `\ast`.
+    /// Their x-projections are disjoint (+0.002), which is what the side-by-side rule
+    /// keys on; the x's own crossing strokes overlap in x by −0.015 and must stay merged.
+    #[test]
+    #[allow(clippy::approx_constant)] // measured pen coordinates; two happen to look like 1/π and log₁₀e
+    fn live_tight_product_5x_splits_but_x_stays_whole() {
+        let s = vec![
+            stroke(&[(0.1667, 0.3257), (0.1749, 0.3221), (0.1758, 0.3220), (0.1843, 0.3245), (0.1902, 0.3321), (0.1860, 0.3430), (0.1779, 0.3496), (0.1758, 0.3501), (0.1730, 0.3479), (0.1753, 0.3414), (0.1884, 0.3408), (0.1973, 0.3446), (0.2001, 0.3466), (0.2010, 0.3461)]), // 2
+            stroke(&[(0.2397, 0.3335), (0.2397, 0.3338), (0.2397, 0.3338), (0.2395, 0.3341), (0.2389, 0.3353), (0.2373, 0.3372), (0.2349, 0.3401), (0.2323, 0.3430), (0.2317, 0.3436), (0.2290, 0.3469), (0.2271, 0.3492), (0.2256, 0.3507), (0.2247, 0.3518), (0.2247, 0.3518)]), // x, stroke 1
+            stroke(&[(0.2191, 0.3395), (0.2191, 0.3397), (0.2197, 0.3397), (0.2205, 0.3399), (0.2218, 0.3401), (0.2235, 0.3407), (0.2257, 0.3412), (0.2282, 0.3418), (0.2306, 0.3425), (0.2323, 0.3430), (0.2327, 0.3428), (0.2350, 0.3439), (0.2374, 0.3446), (0.2396, 0.3449), (0.2406, 0.3448)]), // x, stroke 2
+            stroke(&[(0.2743, 0.3388), (0.2738, 0.3389), (0.2736, 0.3390), (0.2736, 0.3388), (0.2736, 0.3390), (0.2737, 0.3390), (0.2743, 0.3392), (0.2762, 0.3397), (0.2793, 0.3399), (0.2808, 0.3402), (0.2830, 0.3399), (0.2866, 0.3399), (0.2908, 0.3397), (0.2948, 0.3395), (0.2949, 0.3394)]), // -
+            stroke(&[(0.3536, 0.3221), (0.3435, 0.3230), (0.3347, 0.3232), (0.3336, 0.3258), (0.3305, 0.3345), (0.3301, 0.3363), (0.3301, 0.3366), (0.3307, 0.3370), (0.3414, 0.3362), (0.3497, 0.3397), (0.3498, 0.3401), (0.3495, 0.3421), (0.3440, 0.3473), (0.3315, 0.3512), (0.3302, 0.3510), (0.3290, 0.3503), (0.3321, 0.3468), (0.3330, 0.3462)]), // 5
+            stroke(&[(0.3731, 0.3363), (0.3737, 0.3351), (0.3739, 0.3352), (0.3739, 0.3353), (0.3739, 0.3354), (0.3737, 0.3353), (0.3720, 0.3372), (0.3667, 0.3425), (0.3654, 0.3438), (0.3600, 0.3492), (0.3570, 0.3522), (0.3571, 0.3524), (0.3574, 0.3523), (0.3588, 0.3496), (0.3587, 0.3466)]), // x, stroke 1
+            stroke(&[(0.3559, 0.3401), (0.3556, 0.3395), (0.3555, 0.3398), (0.3555, 0.3398), (0.3558, 0.3398), (0.3571, 0.3404), (0.3595, 0.3415), (0.3626, 0.3429), (0.3656, 0.3440), (0.3667, 0.3443), (0.3706, 0.3455), (0.3747, 0.3462), (0.3765, 0.3462), (0.3782, 0.3461)]), // x, stroke 2
+            stroke(&[(0.4052, 0.3301), (0.4051, 0.3298), (0.4052, 0.3297), (0.4055, 0.3296), (0.4074, 0.3297), (0.4109, 0.3296), (0.4154, 0.3295), (0.4210, 0.3291), (0.4261, 0.3286), (0.4304, 0.3283), (0.4337, 0.3282), (0.4343, 0.3282), (0.4372, 0.3282), (0.4384, 0.3286)]), // = top bar
+            stroke(&[(0.4164, 0.3423), (0.4175, 0.3427), (0.4186, 0.3427), (0.4201, 0.3430), (0.4219, 0.3429), (0.4240, 0.3429), (0.4247, 0.3432), (0.4264, 0.3427), (0.4290, 0.3426), (0.4317, 0.3424), (0.4345, 0.3423), (0.4372, 0.3418), (0.4396, 0.3419), (0.4418, 0.3418)]), // = bottom bar
+            stroke(&[(0.5055, 0.3187), (0.5058, 0.3161), (0.5026, 0.3153), (0.4933, 0.3177), (0.4799, 0.3266), (0.4798, 0.3268), (0.4798, 0.3271), (0.4799, 0.3281), (0.4879, 0.3339), (0.4970, 0.3392), (0.4906, 0.3447), (0.4884, 0.3457), (0.4815, 0.3431), (0.4813, 0.3423), (0.4813, 0.3421), (0.4918, 0.3322), (0.5081, 0.3205), (0.5091, 0.3196), (0.5092, 0.3193), (0.5060, 0.3198)]), // 8
+            stroke(&[(0.5369, 0.3191), (0.5353, 0.3180), (0.5296, 0.3203), (0.5212, 0.3280), (0.5209, 0.3286), (0.5194, 0.3334), (0.5194, 0.3340), (0.5202, 0.3369), (0.5274, 0.3415), (0.5347, 0.3427), (0.5362, 0.3426), (0.5431, 0.3393), (0.5463, 0.3324), (0.5463, 0.3318), (0.5441, 0.3215), (0.5400, 0.3174), (0.5397, 0.3174), (0.5384, 0.3179)]), // 0
+        ];
+        let g = segment(&s);
+        assert_eq!(
+            g,
+            vec![
+                vec![0],       // 2
+                vec![1, 2],    // x
+                vec![3],       // -
+                vec![4],       // 5   — was fused with the x below
+                vec![5, 6],    // x
+                vec![7, 8],    // =   (stacked-bar merge)
+                vec![9],       // 8
+                vec![10],      // 0
+            ],
+            "the live `2x-5x=80` must segment into exactly 8 symbols"
+        );
+    }
+
+    /// The side-by-side rule must not split symbols whose strokes touch without
+    /// crossing: a K-style arm meeting its stem has a *positive* x-projection gap
+    /// but near-zero ink distance.
+    #[test]
+    fn touching_side_by_side_strokes_still_merge() {
+        let s = vec![
+            stroke(&[(0.30, 0.30), (0.30, 0.40), (0.30, 0.50)]), // stem
+            stroke(&[(0.301, 0.40), (0.34, 0.32)]),              // upper arm, starts ON the stem
+            stroke(&[(0.301, 0.40), (0.34, 0.50)]),              // lower arm
+            glyph(0.40, 0.35, 0.08, 0.10),                       // a neighbour that must stay separate
+        ];
+        assert_eq!(segment(&s), vec![vec![0, 1, 2], vec![3]]);
     }
 
     #[test]

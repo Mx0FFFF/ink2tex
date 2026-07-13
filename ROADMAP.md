@@ -466,6 +466,47 @@ The gate asked for a number, not a vibe. This is the number, reproducibly:
 normalization documented in the harness and printed with every run; CROHME handled under
 its NC licence (evaluation only, never in the repo, never in training).
 
+### 2026-07-13: one live failure, two geometry rules, +4 F1 on CROHME
+
+The first live subtraction — `2x - 5x = 80`, written naturally on the tablet — came back
+`2x^{-}\ast=8\circ`, and the diagnosis (from the actual ink, pulled off the running
+server) found two independent geometry bugs:
+
+1. **A flat bar defeated both script gates.** The minus (h=0.001) sat 0.003 ABOVE the
+   small x's midline — an ordinary baseline minus — but "script-sized" is vacuously true
+   for a hairline bar and the neighbour-height margin was 0.0003, so it parsed as an
+   exponent. Rule: a bar carries no extremity information (its bottom IS its top); it may
+   only become a script by clearing the base's vertical span outright, the same clause
+   big-operator limits use.
+2. **Distance-only clustering fused the tight product `5x`** (0.0057 apart vs the 0.0073
+   threshold) into one blob that classified `\ast`. Measured discriminator: the 5 and x
+   are DISJOINT in x-projection (+0.002), while every genuine multi-stroke symbol on the
+   page overlaps itself in x by −0.015 or more (x's crossing, ='s bars). Rule:
+   side-by-side strokes must nearly touch (0.35×thresh) to merge — which is *why*
+   handwriting is segmentable: symbols advance horizontally.
+
+Both rules are pinned by tests carrying the live ink verbatim (subsampled with endpoints,
+bbox extremes and closest-approach pairs kept exact). Replaying the same capture:
+**3/8 symbols with broken structure → 6/8 top-1, structure perfect**, both misses
+(`5`→`s`, `0`→`\circ`) in top-5 at ranks 2 and 4 — a 2-tap expression in M4 terms. The
+misread ink itself was relabelled and split into 8 clean training samples
+(`train/collected/live_2026-07-13.ndjson`) — the flywheel's first meal.
+
+**And the external benchmark confirms both rules generalize** (same harness, same
+normalization, full test sets):
+
+| test set | exact match | symbol-bag F1 |
+|---|---|---|
+| CROHME 2016 test | 2.3% → **3.3%** | 46.6% → **50.4%** |
+| CROHME 2019 test | 3.6% → **4.4%** | 46.9% → **50.8%** |
+
+CROHME's hundreds of writers also write products tight and subtraction constantly. This
+is the first CROHME movement after three flat attacks — and it came from device ink, not
+from staring at the benchmark. The `--serve` debug surface gained `GET /ink` (session
+strokes + groups as JSON) so the next segmentation failure is a curl away from being a
+fixture; the WASM API now returns per-symbol top-5 (`symbols[].candidates`) because
+non-negotiable #5 applies to the browser demo too.
+
 ### 2026-07-13: augmentation cannot fake other hands — measured, reverted
 
 Shear (±0.25, the writer's slant) + a low-frequency elastic field were added to training

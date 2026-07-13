@@ -158,6 +158,17 @@ impl Server {
                     .unwrap_or_default();
                 respond(stream, 200, "text/plain; charset=utf-8", body.as_bytes())
             }
+            ("GET", "/ink") => {
+                // Debug: the session's oriented ink + per-symbol stroke groups, so a
+                // bad segmentation or parse can be diagnosed (and turned into a test
+                // fixture) from the laptop without touching the flywheel log. The
+                // first live subtraction had to be exfiltrated through /accept and
+                // the log scraped clean afterwards; never again.
+                let Some(s) = self.session.as_ref() else {
+                    return respond(stream, 409, "text/plain", b"no capture yet");
+                };
+                respond(stream, 200, "application/json", ink_json(s).as_bytes())
+            }
             _ => respond(stream, 404, "text/plain", b"not found"),
         }
     }
@@ -190,6 +201,45 @@ impl Server {
         out.push_str("]}");
         out
     }
+}
+
+/// The whole session as JSON: oriented strokes plus each symbol's stroke indices and
+/// current top-1. Debug surface only — nothing in the UI depends on it.
+fn ink_json(s: &Session) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from("{\"strokes\":[");
+    for (i, st) in s.oriented.strokes.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        for (j, p) in st.points.iter().enumerate() {
+            if j > 0 {
+                out.push(',');
+            }
+            let _ = write!(out, "[{:.5},{:.5}]", p.x, p.y);
+        }
+        out.push(']');
+    }
+    out.push_str("],\"symbols\":[");
+    for (i, sym) in s.symbols.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let top = sym
+            .candidates
+            .get(s.choices[i])
+            .map(|(l, _)| symbol_command(l))
+            .unwrap_or_default();
+        let _ = write!(
+            out,
+            "{{\"strokes\":{:?},\"label\":{}}}",
+            sym.stroke_indices,
+            js_str(&top)
+        );
+    }
+    out.push_str("]}");
+    out
 }
 
 /// One corrected/confirmed symbol → one training sample, in the exact NDJSON shape the

@@ -94,10 +94,32 @@ fn run(floats: &[f32], weights: &[u8], labels: &[u8], counts: &[u8]) -> Result<S
         .map_err(|e| e.to_string())?;
     let choices = vec![0usize; symbols.len()];
     let (latex, svg) = ink2tex_core::compose(&symbols, &choices);
+    // Top-k or it didn't happen: the demo page needs every symbol's ranked
+    // alternatives to offer corrections, same as the on-device UI.
+    let mut syms = String::from("[");
+    for (i, s) in symbols.iter().enumerate() {
+        if i > 0 {
+            syms.push(',');
+        }
+        syms.push_str("{\"candidates\":[");
+        for (j, (label, p)) in s.candidates.iter().enumerate() {
+            if j > 0 {
+                syms.push(',');
+            }
+            syms.push_str(&format!(
+                r#"{{"cmd":{},"p":{:.3}}}"#,
+                json_str(&ink2tex_core::latex::symbol_command(label)),
+                p
+            ));
+        }
+        syms.push_str("]}");
+    }
+    syms.push(']');
     Ok(format!(
-        r#"{{"latex":{},"svg":{}}}"#,
+        r#"{{"latex":{},"svg":{},"symbols":{}}}"#,
         json_str(&latex),
-        json_str(&svg)
+        json_str(&svg),
+        syms
     ))
 }
 
