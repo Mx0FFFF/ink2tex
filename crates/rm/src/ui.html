@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ink2tex</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; } h1 small { opacity:.6; font-weight: normal; }
+  button { font: inherit; padding:.45rem .9rem; border-radius:.5rem; border:1px solid #8884; cursor:pointer; background:transparent; }
+  button.primary { background:#3a6df0; color:white; border-color:#3a6df0; }
+  button:disabled { opacity:.5; cursor:wait; }
+  #render { margin:1.2rem 0; padding:1rem; border:1px solid #8883; border-radius:.75rem; overflow-x:auto; }
+  #render svg { height: 6rem; max-width:100%; }
+  #latex { width:100%; font-family: ui-monospace, monospace; font-size:1rem; padding:.6rem; border-radius:.5rem; border:1px solid #8884; background:transparent; color:inherit; }
+  .sym { display:inline-block; margin:.3rem .4rem .3rem 0; padding:.4rem; border:1px solid #8883; border-radius:.6rem; vertical-align: top; }
+  .sym b { display:block; font-size:.75rem; opacity:.6; margin-bottom:.25rem; }
+  .cand { display:block; width:100%; text-align:left; margin:.15rem 0; font-family: ui-monospace, monospace; }
+  .cand.picked { background:#3a6df0; color:#fff; border-color:#3a6df0; }
+  .row { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; margin:.8rem 0; }
+  #status { opacity:.7; }
+</style>
+</head>
+<body>
+<h1>ink2tex <small>— write on the tablet, correct here</small></h1>
+<div class="row">
+  <button id="cap" class="primary">✏️ Capture</button>
+  <span id="status">press Capture, then write ONE line of math on the tablet and lift the pen</span>
+</div>
+<div id="render" hidden></div>
+<div class="row" id="texrow" hidden>
+  <input id="latex" readonly>
+  <button id="copy">Copy .tex</button>
+  <button id="accept">✓ Accept (log as training data)</button>
+</div>
+<div id="syms"></div>
+<script>
+const $ = id => document.getElementById(id);
+let state = null;
+
+function render() {
+  $("render").hidden = false;
+  $("texrow").hidden = false;
+  $("render").innerHTML = state.svg;
+  $("latex").value = state.latex;
+  const syms = $("syms");
+  syms.innerHTML = "";
+  state.symbols.forEach((s, i) => {
+    const div = document.createElement("div");
+    div.className = "sym";
+    div.innerHTML = `<b>symbol ${i + 1}</b>`;
+    s.candidates.forEach((c, j) => {
+      const b = document.createElement("button");
+      b.className = "cand" + (j === s.choice ? " picked" : "");
+      b.textContent = `${c.cmd}  ${(c.p * 100).toFixed(0)}%`;
+      b.onclick = async () => {
+        const r = await fetch(`/correct?i=${i}&c=${j}`, { method: "POST" });
+        state = await r.json();
+        render();
+      };
+      div.appendChild(b);
+    });
+    syms.appendChild(div);
+  });
+}
+
+$("cap").onclick = async () => {
+  $("cap").disabled = true;
+  $("status").textContent = "…write on the tablet now; recognition starts when the pen goes idle";
+  try {
+    const r = await fetch("/capture", { method: "POST" });
+    if (!r.ok) throw new Error(await r.text());
+    state = await r.json();
+    $("status").textContent = "tap any wrong symbol's correct reading below";
+    render();
+  } catch (e) {
+    $("status").textContent = "capture failed: " + e.message;
+  } finally {
+    $("cap").disabled = false;
+  }
+};
+
+$("copy").onclick = () => navigator.clipboard.writeText($("latex").value);
+$("accept").onclick = async () => {
+  await fetch("/accept", { method: "POST" });
+  $("status").textContent = "logged as confirmed training data ✓";
+};
+</script>
+</body>
+</html>

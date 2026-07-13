@@ -22,6 +22,7 @@ mod capture;
 #[cfg(target_arch = "arm")]
 mod draw;
 mod evdev;
+mod serve;
 mod transform;
 
 use std::path::Path;
@@ -48,6 +49,7 @@ fn main() -> Result<()> {
         Some("--recognize") => recognize(&args),
         Some("--collect") => collect(&args),
         Some("--expr") => expr(&args),
+        Some("--serve") => serve_cmd(&args),
         Some("-h") | Some("--help") => {
             print_usage();
             Ok(())
@@ -75,6 +77,7 @@ fn print_usage() {
     eprintln!("  --collect --symbol S [--count N] [--out P] [--idle-ms MS]");
     eprintln!("                               draw S over and over -> NDJSON training samples");
     eprintln!("  --expr    [--from INK][--dur S]  write an EXPRESSION -> LaTeX (uses expr.iwt)");
+    eprintln!("  --serve   [--port P][--idle-ms MS]  correction UI at http://10.11.99.1:8222");
     eprintln!();
     eprintln!(
         "  --model M / --labels L       override the weights (default: /opt/usr/share/ink2tex,"
@@ -297,6 +300,30 @@ fn ndjson_sample(symbol: &str, ink: &Ink) -> String {
         .collect();
     let key = symbol.replace('\\', "\\\\").replace('"', "\\\"");
     format!(r#"{{"key":"{key}","strokes":[{}]}}"#, strokes.join(","))
+}
+
+/// Capture one expression's ink for the server: record until the pen goes idle.
+pub(crate) fn capture_expression(idle_ms: u64) -> Result<Ink> {
+    let dig = evdev::find_digitizer().context("locating the pen digitizer")?;
+    record_one(&dig, idle_ms)
+}
+
+/// M4: serve the correction UI over usb0. See `serve.rs` — this is just argument plumbing.
+fn serve_cmd(args: &[String]) -> Result<()> {
+    let model = default_asset(args, "--model", "expr.iwt")?;
+    let labels = default_asset(args, "--labels", "expr.labels.txt")?;
+    let counts = default_asset(args, "--counts", "expr.counts.txt")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| t.lines().filter_map(|l| l.trim().parse().ok()).collect());
+    let port: u16 = flag(args, "--port")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8222);
+    let idle_ms: u64 = flag(args, "--idle-ms")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1500);
+    let log = flag(args, "--log").unwrap_or_else(|| "/home/root/corrections.ndjson".to_string());
+    serve::Server::new(&model, &labels, counts, &log)?.run(port, idle_ms)
 }
 
 /// Recognize a whole EXPRESSION: capture (or `--from`) a line of math, run the full

@@ -336,3 +336,51 @@ fn tight_tall_parens_do_not_swallow_their_contents() {
         "the tight-paren composite must parse exactly"
     );
 }
+
+/// The correction round-trip (M4's core loop) on real ink: analyze the equation, correct
+/// the one wrong symbol (`7` read as `>`) by choosing from ITS OWN candidate list, and
+/// the recomposed expression must come out exactly right. This is "every fix is one tap"
+/// as a testable property — and `compose` must re-parse structure from scratch, because a
+/// corrected label can legitimately change the layout.
+#[test]
+fn correcting_the_seven_by_one_tap_yields_the_exact_equation() {
+    let root = workspace_root();
+    let model_path = root.join("train/expr.iwt");
+    if !model_path.exists() {
+        eprintln!("skipping: {} missing", model_path.display());
+        return;
+    }
+    let blob = std::fs::read(&model_path).expect("read model");
+    let weights = Weights::parse(&blob).expect("parse");
+    let labels = Labels::from_lines(
+        &std::fs::read_to_string(root.join("train/expr.labels.txt")).expect("labels"),
+    );
+    let counts: Vec<u32> = std::fs::read_to_string(root.join("train/expr.counts.txt"))
+        .expect("counts")
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    let ink = Ink::decode(
+        &std::fs::read(root.join("crates/core/tests/data/equation_2x_plus_3_eq_7.ink"))
+            .expect("fixture"),
+    )
+    .expect("decode");
+
+    let (_oriented, symbols) =
+        ink2tex_core::analyze(&ink, &weights, &labels, Some(&counts), 5).expect("analyze");
+    assert_eq!(symbols.len(), 6);
+
+    // Uncorrected: the known state of the world.
+    let (latex, svg) = ink2tex_core::compose(&symbols, &[0, 0, 0, 0, 0, 0]);
+    assert!(latex.starts_with("2x+3="), "uncorrected: {latex}");
+    assert!(svg.starts_with("<svg"), "the typesetter must render it");
+
+    // One tap: pick `7` from the last symbol's own candidates.
+    let seven = symbols[5]
+        .candidates
+        .iter()
+        .position(|(l, _)| l == "7")
+        .expect("7 must be in correction reach");
+    let (latex, _svg) = ink2tex_core::compose(&symbols, &[0, 0, 0, 0, 0, seven]);
+    assert_eq!(latex, "2x+3=7", "one correction must finish the equation");
+}

@@ -17,12 +17,15 @@ pub mod orient;
 pub mod segment;
 pub mod stroke;
 pub mod structure;
+pub mod typeset;
 pub mod vocab;
 
 pub use classify::Prediction;
 pub use error::{Error, Result};
 pub use latex::to_latex;
-pub use line::{recognize_expression, recognize_line, LineSymbol};
+pub use line::{
+    analyze, compose, recognize_expression, recognize_line, AnalyzedSymbol, LineSymbol,
+};
 pub use segment::segment;
 pub use stroke::{Ink, Point, Stroke};
 pub use structure::{parse as parse_structure, BBox, Slt, Symbol as PositionedSymbol};

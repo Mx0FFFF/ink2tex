@@ -193,6 +193,62 @@ fn strokes_bbox(ink: &Ink, idx: &[usize]) -> Option<BBox> {
     Some(BBox::new(nx, ny, mx, my))
 }
 
+/// The correction-round unit (M4): everything the UI needs about one recognized symbol —
+/// where it is, which of the user's strokes made it, and its ranked candidates.
+pub struct AnalyzedSymbol {
+    pub stroke_indices: Vec<usize>,
+    pub bbox: crate::structure::BBox,
+    /// Ranked (label, probability); index 0 is the current pick until corrected.
+    pub candidates: Vec<(String, f32)>,
+}
+
+/// Recognize an expression and keep the intermediate state a correction UI needs.
+/// Returns the ORIENTED ink too — the coordinates every bbox refers to.
+pub fn analyze(
+    ink: &Ink,
+    weights: &Weights,
+    labels: &Labels,
+    counts: Option<&[u32]>,
+    k: usize,
+) -> Result<(Ink, Vec<AnalyzedSymbol>)> {
+    let (oriented, line) = recognize_line(ink, weights, labels, counts, k)?;
+    let mut out = Vec::new();
+    for ls in line {
+        let Some(bbox) = strokes_bbox(&oriented, &ls.strokes) else {
+            continue;
+        };
+        let candidates = ls
+            .predictions
+            .iter()
+            .filter_map(|p| labels.get(p.class).map(|l| (l.to_string(), p.prob)))
+            .collect();
+        out.push(AnalyzedSymbol {
+            stroke_indices: ls.strokes,
+            bbox,
+            candidates,
+        });
+    }
+    Ok((oriented, out))
+}
+
+/// Re-compose the expression after corrections: `choice[i]` indexes into symbol i's
+/// candidate list (0 = keep the recognizer's pick). Structure re-parses from scratch —
+/// a corrected label can legitimately change the LAYOUT (fixing `-` to `=` dissolves a
+/// misread fraction), so nothing short of a full re-parse is honest.
+pub fn compose(symbols: &[AnalyzedSymbol], choice: &[usize]) -> (String, String) {
+    let positioned: Vec<crate::structure::Symbol> = symbols
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            let pick = choice.get(i).copied().unwrap_or(0);
+            let (label, _) = s.candidates.get(pick).or_else(|| s.candidates.first())?;
+            Some(crate::structure::Symbol::new(symbol_command(label), s.bbox))
+        })
+        .collect();
+    let slt = parse_structure(&positioned);
+    (to_latex(&slt), crate::typeset::to_svg(&slt))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
