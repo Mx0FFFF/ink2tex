@@ -645,17 +645,34 @@ Line-of-sight graph → relation classification → maximum spanning tree → Sy
 
 **Learning:** graph algorithms, spanning trees, 2D grammar parsing, joint optimization vs. naive pipelines.
 
-### ⬜ M4 — Correction UI + typesetting + export *(3–4 weeks)*
+### 🟡 M4 — Correction UI + typesetting + export — BUILT, awaiting its usage measurement
 
 Tap-to-fix with top-5 alternatives. Correction logging (**every fix is a labelled training example**). A small math typesetter. `.tex` export + HTTP endpoint on `usb0`.
 
 **Done when:** the median expression needs ≤2 corrections and lands in your Overleaf tab.
 
-### ⬜ M5 — Flywheel and reach
+> 🟡 **Built 2026-07-13, measurement pending.** The tablet serves the correction UI over
+> usb0 (`make serve` → http://10.11.99.1:8222): Capture → typeset SVG (core::typeset, the
+> small math typesetter) → every symbol's top-5 as one-tap corrections → copy `.tex`.
+> Corrections and Accepts append to `corrections.ndjson` — every fix is a labelled training
+> example, and `make retrain-corrections` closes the flywheel. The round-trip is proven on
+> real ink (analyze → one tap → exactly `2x+3=7`, in tests). The on-panel variant stays
+> blocked by firmware (docs/device.md). **What remains is the criterion's measurement**:
+> a usage session over the M2 corpus counting corrections-per-expression (median ≤ 2).
+
+### 🟡 M5 — Flywheel and reach — fallback path + demo BUILT; HID and Paper Pro blocked
 
 USB-HID gadget (**the tablet types LaTeX directly into your laptop** — the feature that drives adoption). WASM browser demo. Opt-in corpus contribution → retrain → ship better weights. Paper Pro (aarch64) port.
 
 **Learning:** USB gadget subsystem, configfs, HID report descriptors, possibly building a kernel module.
+
+> 🟡 **2026-07-13.** Delivered: the **HTTP typing fallback** (`scripts/ink2type.sh` — cursor
+> in any editor, the corrected LaTeX types itself; DESIGN §7 said ship this first, and
+> usb_f_hid is absent from the stock kernel), the **WASM browser demo** (`make wasm-demo`,
+> hand-rolled FFI, no wasm-bindgen — the real equation recognizes in 22 ms in-tab), and the
+> **corpus flywheel** (corrections → `retrain-corrections`). Blocked, honestly: the true
+> USB-HID gadget needs an out-of-tree kernel module against the vendor kernel (heavy, and
+> flash-risky on the only test device); the **Paper Pro port needs Paper Pro hardware**.
 
 ---
 

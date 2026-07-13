@@ -16,7 +16,7 @@ EPOCHS    ?= 60
 
 .PHONY: test replay harness build-rm deploy probe record run ink recognize \
         deploy-model deploy-expr expr screenshot check-bans core-purity device-facts fmt clippy ci \
-        dataset train eval ipk
+        dataset train eval ipk retrain-corrections serve wasm-demo
 
 # --- your feedback loops -----------------------------------------------------
 
@@ -110,6 +110,26 @@ recognize: deploy deploy-model
 
 screenshot:
 	ssh $(HOST) 'cat /tmp/screen.png' > /tmp/screen.png && echo "pulled /tmp/screen.png"
+
+# The M4/M5 flywheel: pull the corrections the UI logged on the device, fold them into
+# the collected corpus, rebuild the dataset, retrain. Every fix becomes training data.
+retrain-corrections:
+	scp $(HOST):/home/root/corrections.ndjson train/collected/corrections.ndjson || \
+	  { echo "no corrections on the device yet"; exit 1; }
+	cat train/collected/*.ndjson > /tmp/ink2tex_collected.ndjson
+	cargo run -q --release -p ink2tex-desktop -- --prepare-detexify /tmp/ink2tex_collected.ndjson \
+	  --out-dir train/dataset_collected --classes train/labels_v4.txt
+	python3 train/train.py --data train/dataset_full4 train/dataset_hwrt4 train/dataset_collected \
+	  --epochs 40 --class-weight none --out train/expr.iwt --dump-val train/dataset_val_expr
+
+# Correction UI on the tablet (browser at http://10.11.99.1:8222)
+serve: deploy deploy-expr
+	ssh $(HOST) '$(RM_BIN) --serve'
+
+# The browser demo: same model, same core, compiled to WASM.
+wasm-demo:
+	bash wasm-demo/build.sh
+	node scripts/wasm-smoke.js
 
 # --- packaging ---------------------------------------------------------------
 

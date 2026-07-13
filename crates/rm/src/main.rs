@@ -313,14 +313,20 @@ pub(crate) fn capture_expression(idle_ms: u64) -> Result<Ink> {
 /// expression-corpus collector (M2) drives over SSH, once per target expression.
 fn record_one_cmd(args: &[String]) -> Result<()> {
     let out = flag(args, "--out").unwrap_or_else(|| "/home/root/one.ink".to_string());
-    let idle_ms: u64 = flag(args, "--idle-ms").and_then(|s| s.parse().ok()).unwrap_or(2000);
+    let idle_ms: u64 = flag(args, "--idle-ms")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2000);
     let dig = match device_arg(args).as_deref() {
         Some(p) => evdev::open_digitizer(p).with_context(|| format!("opening {p}"))?,
         None => evdev::find_digitizer().context("locating the pen digitizer")?,
     };
     let ink = record_one(&dig, idle_ms)?;
     std::fs::write(&out, ink.encode()).with_context(|| format!("writing {out}"))?;
-    eprintln!("saved {} strokes / {} points to {out}", ink.strokes.len(), ink.point_count());
+    eprintln!(
+        "saved {} strokes / {} points to {out}",
+        ink.strokes.len(),
+        ink.point_count()
+    );
     Ok(())
 }
 

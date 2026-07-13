@@ -275,6 +275,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ink2tex-wasm"
+version = "0.2.0"
+dependencies = [
+ "ink2tex-core",
+]
+
+[[package]]
 name = "ioctl-gen"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

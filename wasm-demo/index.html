@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ink2tex — in your browser</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; } h1 small { opacity:.6; font-weight:normal; }
+  #pad { border: 1px solid #8886; border-radius: .75rem; touch-action: none; width: 100%; height: 16rem; display:block; background: transparent; }
+  .row { display:flex; gap:.6rem; margin:.8rem 0; align-items:center; flex-wrap:wrap; }
+  button { font: inherit; padding:.45rem .9rem; border-radius:.5rem; border:1px solid #8884; cursor:pointer; background:transparent; }
+  #out { margin-top:1rem; } #out svg { height:5rem; max-width:100%; }
+  #latex { font-family: ui-monospace, monospace; padding:.5rem .7rem; border:1px solid #8883; border-radius:.5rem; display:inline-block; min-width: 12rem; }
+  #status { opacity:.7; }
+</style>
+</head>
+<body>
+<h1>ink2tex <small>— the same 172 KB int8 model, running in your browser</small></h1>
+<canvas id="pad"></canvas>
+<div class="row">
+  <button id="go">Recognize</button>
+  <button id="clear">Clear</button>
+  <span id="status">loading model…</span>
+</div>
+<div id="out" hidden>
+  <div id="svg"></div>
+  <code id="latex"></code>
+</div>
+<script>
+// Hand-rolled glue — no wasm-bindgen. Strokes go in as flat little-endian f32s
+// ([n, len0, x,y,…]); UTF-8 JSON comes back as [u32 len][bytes] out of linear memory.
+let wasm, weights, labels, counts;
+const strokes = [];
+const pad = document.getElementById("pad");
+const ctx = pad.getContext("2d");
+
+function resize() {
+  pad.width = pad.clientWidth * devicePixelRatio;
+  pad.height = pad.clientHeight * devicePixelRatio;
+  redraw();
+}
+function redraw() {
+  ctx.clearRect(0, 0, pad.width, pad.height);
+  ctx.lineWidth = 2 * devicePixelRatio;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = getComputedStyle(document.body).color;
+  for (const s of strokes) {
+    ctx.beginPath();
+    s.forEach(([x, y], i) => i ? ctx.lineTo(x * pad.width, y * pad.height)
+                                : ctx.moveTo(x * pad.width, y * pad.height));
+    ctx.stroke();
+  }
+}
+addEventListener("resize", resize);
+
+let cur = null;
+pad.addEventListener("pointerdown", e => { cur = []; strokes.push(cur); add(e); });
+pad.addEventListener("pointermove", e => { if (cur) { add(e); redraw(); } });
+addEventListener("pointerup", () => cur = null);
+function add(e) {
+  const r = pad.getBoundingClientRect();
+  cur.push([(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]);
+}
+
+async function init() {
+  const [w, l, c, mod] = await Promise.all([
+    fetch("expr.iwt").then(r => r.arrayBuffer()),
+    fetch("expr.labels.txt").then(r => r.arrayBuffer()),
+    fetch("expr.counts.txt").then(r => r.arrayBuffer()),
+    WebAssembly.instantiateStreaming(fetch("ink2tex_wasm.wasm")),
+  ]);
+  weights = new Uint8Array(w); labels = new Uint8Array(l); counts = new Uint8Array(c);
+  wasm = mod.instance.exports;
+  document.getElementById("status").textContent = "draw a line of math, then Recognize";
+  resize();
+}
+init().catch(e => document.getElementById("status").textContent = "load failed: " + e);
+
+function put(bytes) {  // copy a byte array into wasm memory, return its pointer
+  const p = wasm.alloc(bytes.length);
+  new Uint8Array(wasm.memory.buffer, p, bytes.length).set(bytes);
+  return p;
+}
+
+document.getElementById("go").onclick = () => {
+  if (!wasm || !strokes.length) return;
+  const flat = [strokes.length];
+  for (const s of strokes) { flat.push(s.length); for (const [x, y] of s) flat.push(x, y); }
+  const f32 = new Float32Array(flat);
+  const sp = put(new Uint8Array(f32.buffer));
+  const wp = put(weights), lp = put(labels), cp = put(counts);
+  const t0 = performance.now();
+  const rp = wasm.recognize_expr(sp, f32.length, wp, weights.length, lp, labels.length, cp, counts.length);
+  const ms = (performance.now() - t0).toFixed(0);
+  const len = new DataView(wasm.memory.buffer).getUint32(rp, true);
+  const json = JSON.parse(new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, rp + 4, len)));
+  document.getElementById("out").hidden = false;
+  document.getElementById("svg").innerHTML = json.svg || "";
+  document.getElementById("latex").textContent = json.latex || json.error;
+  document.getElementById("status").textContent = `recognized in ${ms} ms, entirely in this tab`;
+};
+document.getElementById("clear").onclick = () => { strokes.length = 0; redraw();
+  document.getElementById("out").hidden = true; };
+</script>
+</body>
+</html>
