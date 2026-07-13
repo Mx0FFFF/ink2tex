@@ -489,8 +489,21 @@ fn baseline(mut units: Vec<Unit>) -> Slt {
             // base's vertical span outright — which is where a genuine exponent
             // bar (x⁻) actually sits.
             let flat_bar = u.bbox.h() < 0.35 * u.bbox.w();
-            let clears_top = u.bbox.max_y < base_box.min_y + 0.1 * base_box.h();
-            let clears_bottom = u.bbox.min_y > base_box.max_y - 0.1 * base_box.h();
+            // For a flat bar, "clears the span" must mean STRICTLY outside it: the
+            // ±0.1h tolerance zone that absorbs jitter for real glyphs is wider than
+            // the bar itself, so a minus drawn at a glyph's bottom edge would "clear"
+            // into a subscript (`a-b` → `a_{-}b`).
+            let (clears_top, clears_bottom) = if flat_bar {
+                (
+                    u.bbox.max_y < base_box.min_y,
+                    u.bbox.min_y > base_box.max_y,
+                )
+            } else {
+                (
+                    u.bbox.max_y < base_box.min_y + 0.1 * base_box.h(),
+                    u.bbox.min_y > base_box.max_y - 0.1 * base_box.h(),
+                )
+            };
             // A script must PROTRUDE past the base's far edge: superscripts rise above
             // the base's top, subscripts hang below its bottom — that is what makes
             // them scripts in every typography there is. An x-height glyph beside an
@@ -506,10 +519,17 @@ fn baseline(mut units: Vec<Unit>) -> Slt {
             let tall_thin_base = base_box.h() > 2.5 * base_box.w();
             let rises_above = u.bbox.min_y < base_box.min_y - SCRIPT_EDGE * base_box.h();
             let drops_below = u.bbox.max_y > base_box.max_y + SCRIPT_EDGE * base_box.h();
-            let above = u.bbox.max_y < base_box.cy() - margin
+            // …and a flat bar takes no scripts as a BASE either: its degenerate span
+            // makes "clears the top" true for anything drawn above it. A live `=`
+            // that over-split into two bars came back `-^{-}` exactly there. Nothing
+            // in the grammar superscripts a minus sign.
+            let base_flat = base_box.h() < 0.35 * base_box.w();
+            let above = !base_flat
+                && u.bbox.max_y < base_box.cy() - margin
                 && (clears_top || rises_above || tall_thin_base)
                 && (script_sized && !flat_bar || clears_top);
-            let below = u.bbox.min_y > base_box.cy() + margin
+            let below = !base_flat
+                && u.bbox.min_y > base_box.cy() + margin
                 && (clears_bottom || drops_below || tall_thin_base)
                 && (script_sized && !flat_bar || clears_bottom);
             if above {
@@ -637,6 +657,19 @@ mod tests {
             sym("3", 0.764, 0.882, 0.786, 0.906),
         ];
         assert_eq!(latex(&s), "b=5k+3");
+    }
+
+    /// Nothing superscripts a minus sign: even a glyph drawn wholly above a bar's
+    /// hairline span stays on the baseline (`a-b` with a high-riding b is `a-b`,
+    /// not `a-^{b}`; a split `=` must degrade to `--`, not `-^{-}`).
+    #[test]
+    fn a_flat_bar_base_takes_no_scripts() {
+        let s = [
+            sym("a", 0.20, 0.60, 0.25, 0.65),
+            sym("-", 0.28, 0.648, 0.32, 0.651),
+            sym("b", 0.33, 0.60, 0.38, 0.645), // entirely above the bar's span
+        ];
+        assert_eq!(latex(&s), "a-b");
     }
 
     /// The protrusion rule must not kill honest scripts: a subscript hangs BELOW the

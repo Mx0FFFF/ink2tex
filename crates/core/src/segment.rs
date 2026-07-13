@@ -327,10 +327,34 @@ fn merge_stacked_bars(groups: Vec<Vec<usize>>, strokes: &[Stroke]) -> Vec<Vec<us
             let (wa, wb) = (a[2] - a[0], b[2] - b[0]);
             let overlap = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
             let vgap = ((a[1] + a[3]) / 2.0 - (b[1] + b[3]) / 2.0).abs();
-            (wa.max(wb) / wa.min(wb).max(1e-6) < 1.8
-                && overlap > 0.6 * wa.min(wb)
-                && vgap < 1.2 * wa.max(wb))
-            .then(|| {
+            if wa.max(wb) / wa.min(wb).max(1e-6) >= 2.4
+                || overlap <= 0.6 * wa.min(wb)
+                || vgap >= 1.2 * wa.max(wb)
+            {
+                return None;
+            }
+            // The corridor test — what actually separates `=` from a fraction bar
+            // paired with a `-` in its numerator. A real `=` has EMPTY SPACE beyond
+            // both bars in their shared x-corridor; a fraction always has content
+            // there (numerator above, denominator below). This is also what lets the
+            // width guard relax from 1.8 to 2.4: a live `=` was drawn with its top
+            // bar at 1.9× ratio, split into two minus signs, and — both being
+            // hairline "bases" — parsed as `-^{-}`.
+            let (upper, lower) = if a[1] + a[3] <= b[1] + b[3] { (a, b) } else { (b, a) };
+            let (cx0, cx1) = (a[0].max(b[0]), a[2].min(b[2]));
+            let reach = 2.0 * vgap;
+            let crowded = groups.iter().enumerate().any(|(k, g)| {
+                k != i && k != i + 1
+                    && group_bbox(g).is_some_and(|c| {
+                        let ccx = (c[0] + c[2]) / 2.0;
+                        let ccy = (c[1] + c[3]) / 2.0;
+                        ccx > cx0
+                            && ccx < cx1
+                            && ((ccy > upper[1] - reach && ccy < upper[1])
+                                || (ccy > lower[3] && ccy < lower[3] + reach))
+                    })
+            });
+            (!crowded).then(|| {
                 let mut g = groups[i].clone();
                 g.extend(&groups[i + 1]);
                 g
@@ -545,6 +569,35 @@ mod tests {
             ],
             "the live `2x-5x=80` must segment into exactly 8 symbols"
         );
+    }
+
+    /// A live `=` whose top bar came out at 1.9× the bottom bar's width (people are
+    /// not rulers) — the old 1.8 similar-width guard split it into two minus signs,
+    /// which then parsed `-^{-}`. Real geometry from the guided session (083). The
+    /// corridor is empty beyond both bars, which is what licenses the merge.
+    #[test]
+    fn a_sloppy_width_equals_still_merges() {
+        let s = vec![
+            stroke(&[(0.413, 0.650), (0.433, 0.648), (0.453, 0.651)]), // lower bar, w=0.040
+            stroke(&[(0.416, 0.636), (0.427, 0.635), (0.437, 0.638)]), // upper bar, w=0.021
+            glyph(0.468, 0.633, 0.025, 0.027),                         // the 2 after it
+        ];
+        let g = segment(&s);
+        assert_eq!(g.len(), 2, "= must be one symbol, then the 2: {g:?}");
+    }
+
+    /// …but the relaxed width guard must NOT glue a numerator's `-` to the fraction
+    /// bar below it: the corridor beyond that pair contains the denominator, and
+    /// content-in-corridor is what separates a fraction from an `=`.
+    #[test]
+    fn a_fraction_bar_does_not_pair_with_the_numerator_minus() {
+        let s = vec![
+            stroke(&[(0.42, 0.40), (0.47, 0.40), (0.52, 0.40)]),       // numerator minus
+            stroke(&[(0.38, 0.50), (0.47, 0.50), (0.56, 0.50)]),       // fraction bar (~1.9×)
+            glyph(0.44, 0.56, 0.06, 0.08),                             // denominator c, in-corridor
+        ];
+        let g = segment(&s);
+        assert_eq!(g.len(), 3, "fraction must stay bar/num/den: {g:?}");
     }
 
     /// The side-by-side rule must not split symbols whose strokes touch without
