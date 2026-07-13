@@ -507,6 +507,23 @@ strokes + groups as JSON) so the next segmentation failure is a curl away from b
 fixture; the WASM API now returns per-symbol top-5 (`symbols[].candidates`) because
 non-negotiable #5 applies to the browser demo too.
 
+### 2026-07-13: the +8-sample retrain — measured negative, reverted
+
+With the failed capture rescued into `train/collected/`, a full retrain was run before
+asking for the 25-minute M2 session, hoping to promote the writer's digits first. The
+val numbers matched v5 (top-5 96.1/85.5) — and real ink got strictly worse: `2`→`\partial`,
+both `x`→`\times`, the tight-paren fixture's `)`→`\rangle`. The count diff explains it:
+v5 had **already trained on all 487 previously collected samples**, so this run added
+eight samples and a reroll of every near-tied rank. Training stochasticity is a real
+cost; paying it for eight samples is a losing trade. Reverted to v5 byte-identical;
+141/141 green again.
+
+Two durable outcomes: **retrain when the flywheel has a meal, not a crumb** (the M2
+session's ~100 expressions is the next real one), and the correction log now dedupes
+at ingest (`train/dedup_corrections.py`, wired into `make retrain-corrections`) — the
+UI logs every exploratory tap, so identical strokes keep only their final label (the
+first live session tried `S` and `\varsigma` before settling on `5`).
+
 ### 2026-07-13: augmentation cannot fake other hands — measured, reverted
 
 Shear (±0.25, the writer's slant) + a low-frequency elastic field were added to training

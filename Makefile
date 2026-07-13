@@ -116,6 +116,7 @@ screenshot:
 retrain-corrections:
 	scp $(HOST):/home/root/corrections.ndjson train/collected/corrections.ndjson || \
 	  { echo "no corrections on the device yet"; exit 1; }
+	python3 train/dedup_corrections.py train/collected/corrections.ndjson
 	cat train/collected/*.ndjson > /tmp/ink2tex_collected.ndjson
 	cargo run -q --release -p ink2tex-desktop -- --prepare-detexify /tmp/ink2tex_collected.ndjson \
 	  --out-dir train/dataset_collected --classes train/labels_v4.txt
