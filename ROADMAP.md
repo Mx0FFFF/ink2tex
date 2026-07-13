@@ -466,6 +466,34 @@ The gate asked for a number, not a vibe. This is the number, reproducibly:
 normalization documented in the harness and printed with every run; CROHME handled under
 its NC licence (evaluation only, never in the repo, never in training).
 
+### 2026-07-13: v7 — the flywheel's first full meal, and M4's gate passes in preview
+
+The M2 session's training fold (437 aligned symbols) went back into training as v7 —
+this time a meal, not a crumb, and this time it holds: **141/141 real-capture guards
+green** and CROHME within noise of v6's rules (2016: 2.7%/49.9, 2019: 4.6%/51.5 — one
+hand's personalization costs the multi-writer benchmark nothing).
+
+Paired on the 20 held-out expressions v7 never saw:
+
+| | v5 | v7 |
+|---|---|---|
+| M2 exact | 0/20 | 4/20 |
+| M4 median taps | ∞ | **1** |
+| not tap-fixable | 10 | 4 |
+| ≤2 taps | 4 | 14 |
+
+**M4's gate condition (median ≤2) is met on the preview fold.** The official numbers for
+both gates still want a fresh 100-expression session against v7 — 80 of the current
+corpus is now v7's training data and may never grade it. What one session bought: exact
+0→20%, median ∞→1, and a correction UI that crossed from demo to usable (14/20
+expressions fixable in ≤2 taps).
+
+The residual failure list is legible, in impact order: (1) **script false-positives** —
+`6_{z}+8=8` and `b_{=}5k+3` have every SYMBOL right at 0–1 taps and lose only to the
+sub/superscript geometry on this hand's size variance; (2) the four **truncated
+captures** (2 s pen-idle cut mid-expression; next session runs `--idle-ms 3000`);
+(3) remaining lookalikes thinning with data: `c`→`C` case-flips, `9`→`\varsigma`.
+
 ### 2026-07-13: one live failure, two geometry rules, +4 F1 on CROHME
 
 The first live subtraction — `2x - 5x = 80`, written naturally on the tablet — came back
@@ -717,7 +745,11 @@ Line-of-sight graph → relation classification → maximum spanning tree → Sy
 
 **Learning:** graph algorithms, spanning trees, 2D grammar parsing, joint optimization vs. naive pipelines.
 
-### 🟡 M4 — Correction UI + typesetting + export — BUILT, awaiting its usage measurement
+### 🟡 M4 — Correction UI + typesetting + export — gate MET on the held-out preview; official run pending
+
+> 📏 **2026-07-13, v7 on 20 unseen expressions: median 1 correction (gate: ≤2).** The
+> official measurement wants a fresh session (the current corpus largely trained v7) —
+> but the criterion's condition is now demonstrably within reach on ink the model never saw.
 
 Tap-to-fix with top-5 alternatives. Correction logging (**every fix is a labelled training example**). A small math typesetter. `.tex` export + HTTP endpoint on `usb0`.
 
