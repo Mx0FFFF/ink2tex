@@ -472,8 +472,16 @@ fn baseline(mut units: Vec<Unit>) -> Slt {
             // \int_{a}^{b} broke exactly there — while a small neighbour needs only a
             // small dead-zone around the midline to absorb jitter.
             let margin = SCRIPT_DY * u.bbox.h().max(1e-6);
-            let above = u.bbox.max_y < base_box.cy() - margin;
-            let below = u.bbox.min_y > base_box.cy() + margin;
+            // …and a script must LOOK like a script: meaningfully smaller than its base,
+            // or clear of the base's vertical span entirely (big-operator limits). On
+            // CROHME's jittery baselines, same-size neighbours were being promoted to
+            // scripts by noise alone — `\sin z` came back `s(^{*}n…` — and a same-size
+            // glyph that merely rides high is a wobbly baseline, not an exponent.
+            let script_sized = u.bbox.h() < 0.9 * base_box.h();
+            let above = u.bbox.max_y < base_box.cy() - margin
+                && (script_sized || u.bbox.max_y < base_box.min_y + 0.1 * base_box.h());
+            let below = u.bbox.min_y > base_box.cy() + margin
+                && (script_sized || u.bbox.min_y > base_box.max_y - 0.1 * base_box.h());
             if above {
                 sup.push(u.clone());
                 j += 1;
