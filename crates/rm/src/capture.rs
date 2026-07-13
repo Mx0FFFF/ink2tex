@@ -160,6 +160,12 @@ impl Capture {
         }
     }
 
+    /// Is the pen tip currently pressed to the glass? The beautifier's hold
+    /// detector needs contact state, not just latched points.
+    pub fn touching(&self) -> bool {
+        self.tip_down
+    }
+
     fn end_stroke(&mut self) {
         if !self.stroke.is_empty() {
             self.ink.push(std::mem::take(&mut self.stroke));

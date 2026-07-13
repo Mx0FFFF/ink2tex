@@ -61,8 +61,29 @@ fn display(label: &str) -> String {
     symbol_command(label)
 }
 
+/// The advance the tracer will actually use for this token: one composed glyph
+/// for a `\command`, per-char Hershey advances for a literal run, CHAR_W for
+/// anything we cannot draw. Layout and tracing MUST agree here — the first
+/// live beautify boxed `\pm` at 600 em per character of its command NAME while
+/// tracing one 630-em glyph, leaving two character-cells of dead page after it.
+fn token_advance(s: &str) -> i32 {
+    if s.starts_with('\\') {
+        return crate::glyphs::strokes(s)
+            .map(|g| g.advance as i32)
+            .unwrap_or(CHAR_W);
+    }
+    s.chars()
+        .map(|c| {
+            crate::glyphs::strokes(&c.to_string())
+                .map(|g| g.advance as i32)
+                .unwrap_or(CHAR_W)
+        })
+        .sum::<i32>()
+        .max(CHAR_W / 2)
+}
+
 fn text_box(s: &str, size: i32) -> LBox {
-    let w = scale(CHAR_W * s.chars().count().max(1) as i32, size);
+    let w = scale(token_advance(s), size);
     let h = scale(EM, size);
     LBox {
         w,
@@ -138,21 +159,25 @@ fn layout_term(t: &Term, size: i32) -> LBox {
             let d = layout_slt(den, scale(size, 850));
             let w = n.w.max(d.w) + scale(200, size);
             let bar = scale(RULE, size);
+            // Clearance above and below the bar: parens and descenders in a
+            // numerator otherwise bottom out at EXACTLY the bar's top edge and
+            // merge with it at pen width.
+            let gap = scale(120, size);
             let mut items = Vec::new();
             items.extend(shift(&n.items, (w - n.w) / 2, 0));
             items.push(Item::Line {
                 x1: 0,
-                y1: n.h + bar / 2,
+                y1: n.h + gap + bar / 2,
                 x2: w,
-                y2: n.h + bar / 2,
+                y2: n.h + gap + bar / 2,
                 stroke: bar,
             });
-            items.extend(shift(&d.items, (w - d.w) / 2, n.h + bar));
+            items.extend(shift(&d.items, (w - d.w) / 2, n.h + gap + bar + gap));
             LBox {
                 w,
-                h: n.h + bar + d.h,
+                h: n.h + gap + bar + gap + d.h,
                 // the fraction bar sits on the maths axis, ~0.55 em above baseline
-                baseline: n.h + bar / 2 + scale(300, size),
+                baseline: n.h + gap + bar / 2 + scale(300, size),
                 items,
             }
         }
@@ -226,6 +251,96 @@ fn layout_term(t: &Term, size: i32) -> LBox {
         baseline: base.baseline + top_overshoot,
         items,
     }
+}
+
+/// A typeset expression as pen polylines — what the beautifier hands to the
+/// injector to "handwrite" back onto the page.
+pub struct StrokePlan {
+    /// Polylines in this plan's own coordinate space (em×1000 units, y down).
+    pub polylines: Vec<Vec<(f32, f32)>>,
+    pub w: f32,
+    pub h: f32,
+    /// Tokens we had no glyph for (skipped, leaving their advance as a gap).
+    pub missing: Vec<String>,
+}
+
+/// Lay out the SLT and trace every item as polylines: text through the Hershey
+/// single-stroke glyphs, rules (fraction bars, radicals) as line segments. The
+/// caller scales/translates the plan into page coordinates.
+pub fn to_strokes(slt: &Slt) -> StrokePlan {
+    let b = layout_slt(slt, EM);
+    let mut plan = StrokePlan {
+        polylines: Vec::new(),
+        w: b.w as f32,
+        h: b.h as f32,
+        missing: Vec::new(),
+    };
+    // (extents corrected against the traced ink below — a wide trailing glyph
+    // can overhang the layout box, and the beautifier scales by these numbers)
+    for it in &b.items {
+        match it {
+            Item::Text { x, y, size, s } => {
+                // (x, y) is the run's left edge on its baseline. Multi-char runs
+                // (function names, spelled-out commands) advance glyph by glyph.
+                let k = *size as f32 / 1000.0;
+                let mut pen_x = *x as f32;
+                let token_is_command = s.starts_with('\\');
+                let units: Vec<String> = if token_is_command {
+                    vec![s.clone()]
+                } else {
+                    s.chars().map(|c| c.to_string()).collect()
+                };
+                for u in units {
+                    match crate::glyphs::strokes(&u) {
+                        Some(g) => {
+                            for pl in &g.polylines {
+                                plan.polylines.push(
+                                    pl.iter()
+                                        .map(|&(gx, gy)| {
+                                            (pen_x + gx * k, *y as f32 + (gy - 800.0) * k)
+                                        })
+                                        .collect(),
+                                );
+                            }
+                            pen_x += g.advance * k;
+                        }
+                        None => {
+                            plan.missing.push(u);
+                            pen_x += 600.0 * k; // leave the advance as a gap
+                        }
+                    }
+                }
+            }
+            Item::Line { x1, y1, x2, y2, .. } => {
+                plan.polylines
+                    .push(vec![(*x1 as f32, *y1 as f32), (*x2 as f32, *y2 as f32)]);
+            }
+        }
+    }
+    // Normalize to the TRACED INK's bounding box. The layout box is a full em
+    // tall (ascender + descender headroom) but a typical formula's ink spans
+    // ~600/1000 of it — scaling by the box height rendered every rewrite at
+    // 40-60% of the handwriting's size. The beautifier matches ink to ink.
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for pl in &plan.polylines {
+        for &(x, y) in pl {
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+        }
+    }
+    if x1 > x0 && y1 > y0 {
+        for pl in &mut plan.polylines {
+            for p in pl {
+                p.0 -= x0;
+                p.1 -= y0;
+            }
+        }
+        plan.w = x1 - x0;
+        plan.h = y1 - y0;
+    }
+    plan
 }
 
 /// Render an SLT as a self-contained SVG document.
@@ -326,5 +441,44 @@ mod tests {
         let slt = parse(&[sym("<", 0.20, 0.40, 0.26, 0.48)]);
         let svg = to_svg(&slt);
         assert!(svg.contains("&lt;"), "raw < must not leak into markup");
+    }
+
+    /// The stroke plan for the quadratic formula's right-hand side — a fraction
+    /// whose numerator holds a ± and a radical — must trace every token with a
+    /// glyph (nothing missing), keep every polyline inside the plan's own bounds,
+    /// and include the fraction bar and radical rules as line segments.
+    #[test]
+    fn quadratic_formula_traces_completely() {
+        let slt = parse(&[
+            sym("x", 0.10, 0.44, 0.14, 0.50),
+            sym("=", 0.16, 0.45, 0.20, 0.48),
+            // numerator: -b ± √(b²-4ac) → simplified layout: -b\pm\sqrt{b}
+            sym("-", 0.24, 0.36, 0.27, 0.365),
+            sym("b", 0.28, 0.32, 0.31, 0.38),
+            sym("\\pm", 0.32, 0.33, 0.35, 0.38),
+            sym("\\sqrt{}", 0.36, 0.30, 0.46, 0.40),
+            sym("b", 0.39, 0.33, 0.42, 0.385),
+            // the fraction bar
+            sym("-", 0.22, 0.44, 0.48, 0.45),
+            // denominator: 2a
+            sym("2", 0.30, 0.50, 0.33, 0.56),
+            sym("a", 0.34, 0.51, 0.37, 0.56),
+        ]);
+        let plan = to_strokes(&slt);
+        assert!(plan.missing.is_empty(), "missing glyphs: {:?}", plan.missing);
+        assert!(plan.polylines.len() > 10, "too few strokes: {}", plan.polylines.len());
+        for pl in &plan.polylines {
+            for &(x, y) in pl {
+                assert!(
+                    x >= -1.0 && x <= plan.w + 1.0 && y >= -1.0 && y <= plan.h + 1.0,
+                    "({x},{y}) escapes the plan bounds {}x{}",
+                    plan.w,
+                    plan.h
+                );
+            }
+        }
+        // Rules present: the fraction bar + at least the radical's three lines.
+        let two_point: usize = plan.polylines.iter().filter(|p| p.len() == 2).count();
+        assert!(two_point >= 4, "expected bar+radical rules, got {two_point}");
     }
 }

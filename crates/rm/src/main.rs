@@ -18,10 +18,12 @@
 //!
 //! No `unwrap()`/`expect()` in runtime paths — a panic here is a dead screen.
 
+mod beautify;
 mod capture;
 #[cfg(target_arch = "arm")]
 mod draw;
 mod evdev;
+mod inject;
 mod serve;
 mod transform;
 
@@ -34,7 +36,7 @@ use ink2tex_core::Ink;
 
 /// Set from a signal handler (SIGINT/SIGTERM) or the `--dur` alarm (SIGALRM) to
 /// break the blocking read loop and finish cleanly.
-static STOP: AtomicBool = AtomicBool::new(false);
+pub(crate) static STOP: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_stop(_sig: libc::c_int) {
     STOP.store(true, Ordering::SeqCst);
@@ -51,6 +53,9 @@ fn main() -> Result<()> {
         Some("--expr") => expr(&args),
         Some("--serve") => serve_cmd(&args),
         Some("--record-one") => record_one_cmd(&args),
+        Some("--inject-test") => inject_test(),
+        Some("--beautify") => beautify_cmd(&args),
+        Some("--inject-ink") => inject_ink_cmd(&args),
         Some("-h") | Some("--help") => {
             print_usage();
             Ok(())
@@ -331,6 +336,17 @@ fn record_one_cmd(args: &[String]) -> Result<()> {
 }
 
 /// M4: serve the correction UI over usb0. See `serve.rs` — this is just argument plumbing.
+/// The auto-shape gesture for math: write, hold the pen still, get typeset ink.
+fn beautify_cmd(args: &[String]) -> Result<()> {
+    let model = default_asset(args, "--model", "expr.iwt")?;
+    let labels = default_asset(args, "--labels", "expr.labels.txt")?;
+    let counts = default_asset(args, "--counts", "expr.counts.txt")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| t.lines().filter_map(|l| l.trim().parse().ok()).collect());
+    beautify::Beautifier::new(&model, &labels, counts)?.run()
+}
+
 fn serve_cmd(args: &[String]) -> Result<()> {
     let model = default_asset(args, "--model", "expr.iwt")?;
     let labels = default_asset(args, "--labels", "expr.labels.txt")?;
@@ -430,6 +446,62 @@ fn expr(args: &[String]) -> Result<()> {
 
 /// Enumerate `/dev/input/event*`, find the pen digitizer by capability, and dump
 /// the axis ranges the kernel reports (fills DEVICE FACTS row 3, grounds the transform).
+/// Prove the injection path end-to-end against the real xochitl: draw a square
+/// with a diagonal at page center (PEN), then erase the diagonal (RUBBER). The
+/// human sees it happen; the machine verifies it later by parsing the page's
+/// `.rm` file. Run with xochitl open on a scratch page.
+fn inject_test() -> Result<()> {
+    let dig = evdev::find_digitizer().context("finding the digitizer")?;
+    eprintln!("injecting into {} ({})", dig.path, dig.name);
+    let mut inj = inject::Injector::open(&dig).context("opening digitizer for write")?;
+    // A 20%-of-screen square centred on the page, then its diagonal.
+    let (cx, cy, r) = (0.5f32, 0.5f32, 0.10f32);
+    let square = vec![
+        (cx - r, cy - r),
+        (cx + r, cy - r),
+        (cx + r, cy + r),
+        (cx - r, cy + r),
+        (cx - r, cy - r),
+    ];
+    let diagonal = vec![(cx - r, cy - r), (cx + r, cy + r)];
+    eprintln!("pen: square…");
+    inj.stroke(inject::Tool::Pen, &square)?;
+    eprintln!("pen: diagonal…");
+    inj.stroke(inject::Tool::Pen, &diagonal)?;
+    std::thread::sleep(Duration::from_millis(800));
+    eprintln!("rubber: erasing the diagonal…");
+    inj.stroke(inject::Tool::Rubber, &diagonal)?;
+    eprintln!("done — the page should show an empty square");
+    Ok(())
+}
+
+/// Replay an `.ink` file as synthetic pen strokes (test rig for the beautifier:
+/// inject a real captured expression, then `--hold` to fire the snap gesture).
+fn inject_ink_cmd(args: &[String]) -> Result<()> {
+    let from = flag(args, "--from").context("--inject-ink needs --from <ink>")?;
+    let ink = Ink::decode(&std::fs::read(&from).with_context(|| format!("reading {from}"))?)
+        .with_context(|| format!("parsing {from}"))?;
+    let dig = evdev::find_digitizer().context("finding the digitizer")?;
+    let mut inj = inject::Injector::open(&dig).context("opening digitizer for write")?;
+    eprintln!("replaying {} strokes from {from}", ink.strokes.len());
+    for stroke in &ink.strokes {
+        let pts: Vec<(f32, f32)> = stroke.points.iter().map(|p| (p.x, p.y)).collect();
+        inj.stroke(inject::Tool::Pen, &pts)?;
+    }
+    if args.iter().any(|a| a == "--hold") {
+        // The snap gesture: touch below the ink and stay put past the trigger.
+        let (mut hx, mut hy) = (0.5f32, 0.5f32);
+        if let Some(p) = ink.strokes.last().and_then(|s| s.points.last()) {
+            hx = p.x;
+            hy = (p.y + 0.08).min(0.95);
+        }
+        eprintln!("holding at ({hx:.2},{hy:.2})…");
+        let still = vec![(hx, hy); 500]; // ~1.5 s at the injector's dwell
+        inj.stroke(inject::Tool::Pen, &still)?;
+    }
+    Ok(())
+}
+
 fn probe() -> Result<()> {
     let d = evdev::find_digitizer().context("locating the pen digitizer")?;
     println!("digitizer node : {}", d.path);

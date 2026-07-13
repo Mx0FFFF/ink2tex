@@ -111,6 +111,12 @@ struct Cli {
     #[arg(long, value_name = "INK")]
     recognize_expr: Option<PathBuf>,
 
+    /// Recognize an `.ink` expression and dump the BEAUTIFIER's stroke plan as
+    /// JSON (layout-space polylines + missing-glyph list) — render it offline to
+    /// see exactly what would be written back onto the page.
+    #[arg(long, value_name = "INK")]
+    plan: Option<PathBuf>,
+
     /// Dump the expression pipeline's symbol grouping as JSON: oriented per-symbol
     /// strokes, in reading order, in the exact NDJSON stroke shape the flywheel logs
     /// (`{"x":…,"y":…,"t":…}`). This is the ground-truth-alignment hook: zip these
@@ -251,6 +257,57 @@ fn main() -> Result<()> {
                     ));
                 }
                 out.push(']');
+            }
+            out.push(']');
+        }
+        out.push_str("]}");
+        println!("{out}");
+        return Ok(());
+    }
+
+    if let Some(ink_path) = cli.plan {
+        let model_path = cli.model.clone().context("--plan needs --model <iwt>")?;
+        let labels_path = cli.labels.clone().context("--plan needs --labels <txt>")?;
+        let bytes =
+            std::fs::read(&ink_path).with_context(|| format!("reading {}", ink_path.display()))?;
+        let ink = Ink::decode(&bytes)
+            .with_context(|| format!("parsing {} as .ink", ink_path.display()))?;
+        let blob = std::fs::read(&model_path)
+            .with_context(|| format!("reading {}", model_path.display()))?;
+        let weights = Weights::parse(&blob).context("parsing model .iwt")?;
+        let labels = Labels::from_lines(
+            &std::fs::read_to_string(&labels_path)
+                .with_context(|| format!("reading {}", labels_path.display()))?,
+        );
+        let counts: Option<Vec<u32>> = std::fs::read_to_string(
+            labels_path
+                .to_string_lossy()
+                .replace(".labels.txt", ".counts.txt"),
+        )
+        .ok()
+        .map(|t| t.lines().filter_map(|l| l.trim().parse().ok()).collect());
+        let (_o, symbols) =
+            ink2tex_core::analyze(&ink, &weights, &labels, counts.as_deref(), 5)?;
+        let choices = vec![0usize; symbols.len()];
+        let slt = ink2tex_core::compose_slt(&symbols, &choices);
+        let plan = ink2tex_core::typeset::to_strokes(&slt);
+        let mut out = format!(
+            "{{\"latex\":\"{}\",\"w\":{},\"h\":{},\"missing\":{:?},\"polylines\":[",
+            ink2tex_core::compose(&symbols, &choices).0.replace('\\', "\\\\"),
+            plan.w,
+            plan.h,
+            plan.missing
+        );
+        for (i, pl) in plan.polylines.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push('[');
+            for (j, (x, y)) in pl.iter().enumerate() {
+                if j > 0 {
+                    out.push(',');
+                }
+                out.push_str(&format!("[{x:.1},{y:.1}]"));
             }
             out.push(']');
         }

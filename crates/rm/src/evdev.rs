@@ -52,6 +52,21 @@ fn eviocgabs(abs: u32) -> libc::c_ulong {
     ioc(IOC_READ, 0x40 + abs, std::mem::size_of::<AbsInfo>() as u32)
 }
 
+/// EVIOCGKEY: snapshot of the device's CURRENT key state (`dev->key` bitmap) —
+/// not events, but "what is held down right now". The injector uses it as an
+/// interlock: if the hardware pen is in range or touching, injecting would
+/// interleave with a live human stroke in the shared input-core state.
+pub fn current_keys(fd: RawFd) -> io::Result<[u8; KEY_MAX / 8 + 1]> {
+    let mut keys = [0u8; KEY_MAX / 8 + 1];
+    // SAFETY: buffer sized to hold all key bits; EVIOCGKEY fills at most len.
+    unsafe { ioctl(fd, ioc(IOC_READ, 0x18, keys.len() as u32), keys.as_mut_ptr() as *mut _)? };
+    Ok(keys)
+}
+
+pub fn key_is_down(keys: &[u8], code: u16) -> bool {
+    test_bit(keys, code as usize)
+}
+
 // ---- evdev protocol constants we care about ---------------------------------
 pub const EV_SYN: u16 = 0x00;
 pub const EV_KEY: u16 = 0x01;
@@ -202,6 +217,27 @@ pub struct Digitizer {
     pub tilt_x: AbsInfo,
     pub tilt_y: AbsInfo,
     pub distance: AbsInfo,
+    /// Does the device advertise `BTN_TOOL_RUBBER`? Injecting an "erase" onto a
+    /// device without it would draw INK where we meant to rub it out.
+    pub has_rubber: bool,
+}
+
+/// Does this digitizer advertise the eraser tool bit?
+fn advertises_rubber(fd: RawFd) -> bool {
+    let mut keys = [0u8; KEY_MAX / 8 + 1];
+    // SAFETY: buffer sized to hold all key bits.
+    if unsafe {
+        ioctl(
+            fd,
+            eviocgbit(EV_KEY as u32, keys.len() as u32),
+            keys.as_mut_ptr() as *mut _,
+        )
+    }
+    .is_err()
+    {
+        return false;
+    }
+    test_bit(&keys, BTN_TOOL_RUBBER as usize)
 }
 
 /// Does this fd advertise the pen? A digitizer emits `BTN_TOOL_PEN` (an EV_KEY)
@@ -259,6 +295,7 @@ pub fn open_digitizer(path: &str) -> io::Result<Digitizer> {
         tilt_x: get_abs(raw, ABS_TILT_X).unwrap_or_default(),
         tilt_y: get_abs(raw, ABS_TILT_Y).unwrap_or_default(),
         distance: get_abs(raw, ABS_DISTANCE).unwrap_or_default(),
+        has_rubber: advertises_rubber(raw),
         path: path.to_string(),
         fd,
     })
@@ -297,6 +334,7 @@ pub fn find_digitizer() -> io::Result<Digitizer> {
                 tilt_x: get_abs(raw, ABS_TILT_X).unwrap_or_default(),
                 tilt_y: get_abs(raw, ABS_TILT_Y).unwrap_or_default(),
                 distance: get_abs(raw, ABS_DISTANCE).unwrap_or_default(),
+                has_rubber: advertises_rubber(raw),
                 path,
                 fd,
             });

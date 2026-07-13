@@ -236,6 +236,13 @@ pub fn analyze(
 /// a corrected label can legitimately change the LAYOUT (fixing `-` to `=` dissolves a
 /// misread fraction), so nothing short of a full re-parse is honest.
 pub fn compose(symbols: &[AnalyzedSymbol], choice: &[usize]) -> (String, String) {
+    let slt = compose_slt(symbols, choice);
+    (to_latex(&slt), crate::typeset::to_svg(&slt))
+}
+
+/// The Symbol Layout Tree behind `compose`, for callers that need the structure
+/// itself rather than a rendering — the beautifier turns it into pen strokes.
+pub fn compose_slt(symbols: &[AnalyzedSymbol], choice: &[usize]) -> crate::structure::Slt {
     let positioned: Vec<crate::structure::Symbol> = symbols
         .iter()
         .enumerate()
@@ -245,8 +252,7 @@ pub fn compose(symbols: &[AnalyzedSymbol], choice: &[usize]) -> (String, String)
             Some(crate::structure::Symbol::new(symbol_command(label), s.bbox))
         })
         .collect();
-    let slt = parse_structure(&positioned);
-    (to_latex(&slt), crate::typeset::to_svg(&slt))
+    parse_structure(&positioned)
 }
 
 #[cfg(test)]
