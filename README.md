@@ -72,7 +72,14 @@ than the project.
 
 ## Licence and attribution
 
-Code: **MIT OR Apache-2.0**.
+Code is dual-licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+**at your option** — the standard Rust convention: you (including any distributor or
+packager) may use, redistribute and package this code under whichever of the two you
+choose. No guideline is needed because the choice is yours, not ours.
 
 The shipped weights are trained on the [Detexify](https://github.com/kirel/detexify-data)
 dataset — 210,454 drawings contributed by its users — which is **ODbL**. See

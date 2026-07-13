@@ -1,20 +1,15 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 The Toltec Contributors
 # SPDX-License-Identifier: MIT
-#
-# Toltec recipe for ink2tex. Format: https://github.com/toltec-dev/build/blob/main/docs/recipe-format.md
-#
-# Source is the published v0.1.0 tarball, pinned by sha256 — Toltec builds it in a clean
-# `rust:v3.3` image. `make ipk` builds the same package from a local tree.
 
 pkgnames=(ink2tex)
-pkgdesc="Handwritten math to LaTeX, fully offline: draw a symbol (or a whole expression) with the pen, get the command"
+pkgdesc="Offline handwritten math to LaTeX (rm2 only)"
 url=https://github.com/Mx0FFFF/ink2tex
 pkgver=0.2.0-1
 timestamp=2026-07-13T00:00:00Z
 section="math"
 maintainer="Mx0FFFF <mx0ffffff@gmail.com>"
-license=MIT
+license="MIT OR Apache-2.0"
 archs=(rm2)
 
 image=rust:v3.3
@@ -22,44 +17,25 @@ source=(https://github.com/Mx0FFFF/ink2tex/archive/refs/tags/v0.2.0.zip)
 sha256sums=(7dc9701f6d5ddbf009feaa3ed9c9fb7516a2645d565e2a4c739a15a434cac926)
 
 build() {
-	# The device frontend is the only crate that touches the tablet; core is device-free.
 	cargo build --release --target armv7-unknown-linux-gnueabihf -p ink2tex-rm
 }
 
 package() {
 	install -D -m 755 "$srcdir"/target/armv7-unknown-linux-gnueabihf/release/ink2tex-rm \
 		"$pkgdir"/opt/bin/ink2tex
-
-	# The int8 weights + their label list. The binary looks here by default, so a user who
-	# installs the package can just run `ink2tex --recognize` with no flags.
 	install -D -m 644 "$srcdir"/train/model.iwt "$pkgdir"/opt/usr/share/ink2tex/model.iwt
 	install -D -m 644 "$srcdir"/train/model.labels.txt \
 		"$pkgdir"/opt/usr/share/ink2tex/model.labels.txt
-
-	# The EXPRESSION model (write `2x + 3 = 7`, get LaTeX — `ink2tex --expr`). Separate
-	# from the lookup model on purpose: different vocabularies for different questions.
 	install -D -m 644 "$srcdir"/train/expr.iwt "$pkgdir"/opt/usr/share/ink2tex/expr.iwt
 	install -D -m 644 "$srcdir"/train/expr.labels.txt \
 		"$pkgdir"/opt/usr/share/ink2tex/expr.labels.txt
 	install -D -m 644 "$srcdir"/train/expr.counts.txt \
 		"$pkgdir"/opt/usr/share/ink2tex/expr.counts.txt
-
-	# Required, not decorative: the weights are trained on the Detexify and HWRT
-	# databases, both ODbL. A Produced Work must carry the attribution notice with it.
+	# Weights are trained on ODbL databases; the notice must ship with them.
 	install -D -m 644 "$srcdir"/ATTRIBUTION.md "$pkgdir"/opt/usr/share/ink2tex/ATTRIBUTION.md
 }
 
 configure() {
-	echo ""
-	echo "ink2tex installed. It is a command-line tool — run it over SSH:"
-	echo ""
-	echo "    ink2tex --recognize        # draw ONE symbol -> top-5 LaTeX commands"
-	echo "    ink2tex --expr             # write a LINE of math -> LaTeX (experimental)"
-	echo ""
-	echo "Everything runs on-device: no cloud, no network, no account. ~16 ms per symbol;"
-	echo "expression mode auto-rotates landscape writing."
-	echo ""
-	echo "Weights are trained on the Detexify dataset (ODbL) — see"
-	echo "/opt/usr/share/ink2tex/ATTRIBUTION.md"
-	echo ""
+	echo "Draw one symbol:      ink2tex --recognize"
+	echo "Write a line of math: ink2tex --expr"
 }
