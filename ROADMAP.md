@@ -466,6 +466,21 @@ The gate asked for a number, not a vibe. This is the number, reproducibly:
 normalization documented in the harness and printed with every run; CROHME handled under
 its NC licence (evaluation only, never in the repo, never in training).
 
+### 2026-07-13: augmentation cannot fake other hands — measured, reverted
+
+Shear (±0.25, the writer's slant) + a low-frequency elastic field were added to training
+augmentation as the code-side lever on cap 1 (writer diversity), and measured (v6):
+own held-out 96.0/85.6 (fine), **CROHME symbol-F1 46.7% vs 46.6% — flat on the exact
+metric it was aimed at** — and a real capture regressed (`∞` → `\propto` at 78%; an
+elastic warp teaches that open loops ≈ closed loops). Reverted per the discipline:
+experiments that don't measure don't ship.
+
+Three attacks on the CROHME number today — lexicon (cap 4), script gate (cap 3),
+augmentation (cap 1) — and three flats. The conclusion is now hard: **writer diversity is
+a data property.** The remaining moves are the own corpus growing beyond one hand (other
+people's ink, collected with `--collect`), and the §4.2 segmentation lattice. There is no
+code-only shortcut, and the roadmap stops looking for one.
+
 ### 2026-07-13: the function-name lexicon pass — right fix, wrong bottleneck
 
 `structure` now collapses adjacent script-less letters spelling a known function into one

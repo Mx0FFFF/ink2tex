@@ -132,38 +132,28 @@ def build_model(nf, n_classes, size):
 
 
 def augment(x):
-    r"""Random affine + SHEAR + elastic warp on a batch of 1×H×W bitmaps. Train-time ONLY.
+    r"""Random affine (rotation, scale, translation) on a batch of 1×H×W bitmaps —
+    train-time ONLY. Worth +3 top-5 on the small corpus; still earns its keep on the tail.
 
-    The affine set (rotation/scale/translation) was worth +3 top-5 on the small corpus.
-    The additions exist for one measured reason: the CROHME diagnosis showed the classifier
-    collapsing on WRITER DIVERSITY it has never seen (`i`→`(`, `o`→`\circ`, `si`→`\psi` —
-    our letters come from ~50-130 samples in two hands). Slant (shear) is the single
-    biggest hand-to-hand variation and pure rotation cannot fake it: a sheared `1` leans
-    while its flag stays flat, a rotated `1` tips whole. The elastic field adds the
-    low-frequency wobble of a hand that is not a plotter. Both are the only *legal* way
-    left to buy diversity — every permissively-licensed dataset is already in the pot."""
+    Shear (±0.25) + a low-frequency elastic field were TRIED (v6, 2026-07-13) as the
+    code-side lever on writer diversity — and measured: CROHME symbol-F1 46.7% vs 46.6%,
+    i.e. flat on the exact metric they were aimed at, while a real capture regressed
+    (`∞` flipped to `\propto` at 78% — the elastic warp plausibly teaches that open
+    loops ≈ closed loops). Reverted. The conclusion this hardens: writer diversity is a
+    DATA property; augmentation of one hand's ink does not simulate other hands.
+    """
     import torch
 
     b = x.shape[0]
     ang = (torch.rand(b) - 0.5) * 0.4  # ±0.2 rad
     scl = 1.0 + (torch.rand(b) - 0.5) * 0.3  # ±15%
-    shr = (torch.rand(b) - 0.5) * 0.5  # x-shear ±0.25: the writer's slant
     tx = (torch.rand(b) - 0.5) * 0.2
     ty = (torch.rand(b) - 0.5) * 0.2
     cos, sin = torch.cos(ang) * scl, torch.sin(ang) * scl
     theta = torch.zeros(b, 2, 3)
-    # rotation·scale composed with an x-shear: [[c, -s+shr·c], [s, c+shr·s]]
-    theta[:, 0, 0], theta[:, 0, 1], theta[:, 0, 2] = cos, -sin + shr * cos, tx
-    theta[:, 1, 0], theta[:, 1, 1], theta[:, 1, 2] = sin, cos + shr * sin, ty
+    theta[:, 0, 0], theta[:, 0, 1], theta[:, 0, 2] = cos, -sin, tx
+    theta[:, 1, 0], theta[:, 1, 1], theta[:, 1, 2] = sin, cos, ty
     grid = torch.nn.functional.affine_grid(theta, list(x.shape), align_corners=False)
-
-    # Elastic-lite: a smooth per-image displacement field, built by upsampling 3×3 noise.
-    # Low-frequency on purpose — high-frequency warp shreds thin strokes at 32×32.
-    h, w = x.shape[2], x.shape[3]
-    coarse = (torch.rand(b, 2, 3, 3) - 0.5) * 0.12
-    field = torch.nn.functional.interpolate(coarse, size=(h, w), mode="bilinear",
-                                            align_corners=False)
-    grid = grid + field.permute(0, 2, 3, 1)
     return torch.nn.functional.grid_sample(x, grid, align_corners=False)
 
 
