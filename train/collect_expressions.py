@@ -23,7 +23,10 @@ def main():
     ap.add_argument("--targets", default="train/m2_targets.txt")
     ap.add_argument("--out-dir", default="train/collected/m2")
     ap.add_argument("--start", type=int, default=0)
-    ap.add_argument("--idle-ms", type=int, default=2000)
+    # 3 s: the first session lost 4/100 captures to writers who pause mid-expression
+    # at 2 s. The cost is 1 s more wait after the LAST symbol; the benefit is whole
+    # expressions.
+    ap.add_argument("--idle-ms", type=int, default=3000)
     args = ap.parse_args()
 
     targets = [t.strip() for t in open(args.targets) if t.strip()]

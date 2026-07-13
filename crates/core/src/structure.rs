@@ -247,6 +247,7 @@ fn detrend(symbols: &[Symbol]) -> Vec<Symbol> {
 
 /// Threshold factor (fraction of a symbol's height) for region classification.
 const SCRIPT_DY: f32 = 0.25; // vertical offset that makes a neighbour a super/subscript
+const SCRIPT_EDGE: f32 = 0.25; // how far past the base's edge a script must protrude
 
 /// Is this symbol a plausible fraction *bar*? A wide, short stroke, or a labelled
 /// rule/minus. (Whether it's actually a fraction is decided by content above/below.)
@@ -490,10 +491,27 @@ fn baseline(mut units: Vec<Unit>) -> Slt {
             let flat_bar = u.bbox.h() < 0.35 * u.bbox.w();
             let clears_top = u.bbox.max_y < base_box.min_y + 0.1 * base_box.h();
             let clears_bottom = u.bbox.min_y > base_box.max_y - 0.1 * base_box.h();
+            // A script must PROTRUDE past the base's far edge: superscripts rise above
+            // the base's top, subscripts hang below its bottom — that is what makes
+            // them scripts in every typography there is. An x-height glyph beside an
+            // ascender glyph does neither: in the first guided session `6z+8=8` parsed
+            // `6_{z}…` and `b=5k+3` parsed `b_{=}…`, with the z's and ='s bottoms
+            // sitting ON the 6's and b's baselines (within 0.003–0.007) — riding low
+            // *within* the base's span is a short letter, not a subscript.
+            //
+            // The one legitimate exception is a TALL-THIN base (∫: aspect ≈ 5 vs ≈ 1–2
+            // for letters and digits): the glyph itself spans the whole line, so its
+            // limits sit INSIDE its vertical extent and can't protrude past edges that
+            // stretch from ascender to descender. Those keep the pre-protrusion rules.
+            let tall_thin_base = base_box.h() > 2.5 * base_box.w();
+            let rises_above = u.bbox.min_y < base_box.min_y - SCRIPT_EDGE * base_box.h();
+            let drops_below = u.bbox.max_y > base_box.max_y + SCRIPT_EDGE * base_box.h();
             let above = u.bbox.max_y < base_box.cy() - margin
-                && (clears_top || (script_sized && !flat_bar));
+                && (clears_top || rises_above || tall_thin_base)
+                && (script_sized && !flat_bar || clears_top);
             let below = u.bbox.min_y > base_box.cy() + margin
-                && (clears_bottom || (script_sized && !flat_bar));
+                && (clears_bottom || drops_below || tall_thin_base)
+                && (script_sized && !flat_bar || clears_bottom);
             if above {
                 sup.push(u.clone());
                 j += 1;
@@ -587,6 +605,54 @@ mod tests {
             sym("-", 0.245, 0.328, 0.260, 0.329), // wholly above x's top edge
         ];
         assert_eq!(latex(&s), "x^{-}");
+    }
+
+    /// Guided-session geometry, verbatim: an x-height letter beside an ascender digit
+    /// sits low *within* the digit's span with their BOTTOMS aligned — that is a short
+    /// letter on the shared baseline, not a subscript. Parsed `6_{z}+8=8` before the
+    /// protrusion rule.
+    #[test]
+    fn live_xheight_letter_after_ascender_digit_stays_on_the_baseline() {
+        let s = [
+            sym("6", 0.241, 0.568, 0.269, 0.608),
+            sym("z", 0.274, 0.595, 0.313, 0.611),
+            sym("+", 0.327, 0.594, 0.362, 0.608),
+            sym("8", 0.388, 0.593, 0.410, 0.616),
+            sym("=", 0.429, 0.603, 0.467, 0.616),
+            sym("8", 0.493, 0.601, 0.521, 0.622),
+        ];
+        assert_eq!(latex(&s), "6z+8=8");
+    }
+
+    /// Same failure, other shape: `=` after an ascender letter (`b=5k+3` → `b_{=}5k+3`).
+    /// The `=` is x-height and bottom-aligned with the b — baseline, not subscript.
+    #[test]
+    fn live_equals_after_ascender_letter_stays_on_the_baseline() {
+        let s = [
+            sym("b", 0.592, 0.855, 0.619, 0.889),
+            sym("=", 0.625, 0.880, 0.654, 0.896),
+            sym("5", 0.671, 0.873, 0.700, 0.899),
+            sym("k", 0.695, 0.868, 0.723, 0.902),
+            sym("+", 0.731, 0.888, 0.759, 0.905),
+            sym("3", 0.764, 0.882, 0.786, 0.906),
+        ];
+        assert_eq!(latex(&s), "b=5k+3");
+    }
+
+    /// The protrusion rule must not kill honest scripts: a subscript hangs BELOW the
+    /// base's bottom, a superscript rises ABOVE its top — both still parse.
+    #[test]
+    fn protruding_scripts_still_parse() {
+        let sub = [
+            sym("x", 0.30, 0.30, 0.45, 0.60),
+            sym("i", 0.46, 0.55, 0.54, 0.80), // bottom far below x's bottom
+        ];
+        assert_eq!(latex(&sub), "x_{i}");
+        let sup = [
+            sym("x", 0.30, 0.40, 0.45, 0.70),
+            sym("2", 0.46, 0.20, 0.56, 0.39), // top far above x's top
+        ];
+        assert_eq!(latex(&sup), "x^{2}");
     }
 
     #[test]
