@@ -119,7 +119,78 @@ struct Unit {
 
 /// Parse positioned symbols into an SLT.
 pub fn parse(symbols: &[Symbol]) -> Slt {
-    baseline(form_units(&detrend(symbols)))
+    merge_function_names(baseline(form_units(&detrend(symbols))))
+}
+
+/// Multi-letter function names, longest first (`arcsin` must win before `sin` can).
+///
+/// The classifier reads one glyph at a time, so a handwritten `sin` arrives as the three
+/// letters `s`,`i`,`n` — and CROHME writes function names *constantly*: this was the
+/// top-ranked cap on the first benchmark run (exact 2.3%/3.6%, symbol-F1 ~47%). The fix
+/// is the standard lexicon pass every HMER system carries: collapse a run of adjacent,
+/// script-less, single-letter terms that spells a known name into one `\sin` token.
+///
+/// `s·i·n` as a product of three variables is a real ambiguity — and in written
+/// mathematics that reading is rare enough that the lexicon wins by default. The list is
+/// deliberately conservative; extending it is cheap, un-merging a false positive is not.
+const FUNCTION_NAMES: &[&str] = &[
+    "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh", "sin", "cos", "tan", "log", "lim", "ln",
+    "exp", "max", "min", "det", "gcd",
+];
+
+/// Collapse letter-runs spelling function names, everywhere in the tree.
+///
+/// Scripts are the subtle part: `sin^{2}` is written with the superscript on the final
+/// `n`, and `\log_{2}` with the subscript on the `g` — so the LAST letter of a run may
+/// carry scripts, which transfer to the merged term. A script on any *earlier* letter
+/// breaks the run (that letter is a variable being exponentiated, not mid-function).
+fn merge_function_names(slt: Slt) -> Slt {
+    let terms = slt.terms;
+    let mut out: Vec<Term> = Vec::new();
+    let mut i = 0;
+    'outer: while i < terms.len() {
+        // Try to start a lexicon word here — longest name first.
+        for name in FUNCTION_NAMES {
+            let k = name.len();
+            if i + k > terms.len() {
+                continue;
+            }
+            let window = &terms[i..i + k];
+            let spells = window.iter().zip(name.chars()).all(
+                |(t, ch)| matches!(&t.base, Base::Symbol(l) if l.len() == 1 && l.starts_with(ch)),
+            );
+            // Only the final letter may carry scripts (they move to the merged term).
+            let clean_prefix = window[..k - 1]
+                .iter()
+                .all(|t| t.sup.is_none() && t.sub.is_none());
+            if spells && clean_prefix {
+                let last = &window[k - 1];
+                out.push(Term {
+                    base: Base::Symbol(format!("\\{name}")),
+                    sup: last.sup.clone().map(merge_function_names),
+                    sub: last.sub.clone().map(merge_function_names),
+                });
+                i += k;
+                continue 'outer;
+            }
+        }
+        // No word starts here: keep the term, recursing into every region it owns.
+        let t = terms[i].clone();
+        out.push(Term {
+            base: match t.base {
+                Base::Frac { num, den } => Base::Frac {
+                    num: merge_function_names(num),
+                    den: merge_function_names(den),
+                },
+                Base::Sqrt(inner) => Base::Sqrt(merge_function_names(inner)),
+                b => b,
+            },
+            sup: t.sup.map(merge_function_names),
+            sub: t.sub.map(merge_function_names),
+        });
+        i += 1;
+    }
+    Slt { terms: out }
 }
 
 /// Remove the writing slant before any script decision is made.
@@ -597,6 +668,68 @@ mod tests {
             sym("1", 0.52, 0.42, 0.56, 0.50),
         ];
         assert_eq!(latex(&syms), "2x^{2}+1");
+    }
+
+    /// The lexicon pass: `s`,`i`,`n` on one baseline is the function, not a product of
+    /// three variables — the reading written mathematics almost always means, and the
+    /// top-ranked cap on the first CROHME run.
+    #[test]
+    fn adjacent_letters_spelling_a_function_merge() {
+        let syms = [
+            sym("s", 0.20, 0.42, 0.26, 0.50),
+            sym("i", 0.27, 0.42, 0.30, 0.50),
+            sym("n", 0.31, 0.42, 0.37, 0.50),
+            sym("x", 0.40, 0.42, 0.46, 0.50),
+        ];
+        assert_eq!(latex(&syms), "\\sinx");
+    }
+
+    /// `sin^{2}` is written with the script on the final `n`; it must transfer to the
+    /// merged token. And `\log_{2}`-style subscripts likewise.
+    #[test]
+    fn scripts_on_the_final_letter_transfer_to_the_function() {
+        let syms = [
+            sym("s", 0.20, 0.42, 0.26, 0.50),
+            sym("i", 0.27, 0.42, 0.30, 0.50),
+            sym("n", 0.31, 0.42, 0.37, 0.50),
+            sym("2", 0.375, 0.34, 0.41, 0.40), // superscript on the n
+        ];
+        assert_eq!(latex(&syms), "\\sin^{2}");
+    }
+
+    /// A script on an EARLIER letter breaks the run: `s^{2}in` is a squared variable
+    /// followed by two more variables, not a function name.
+    #[test]
+    fn a_script_mid_run_prevents_the_merge() {
+        let syms = [
+            sym("s", 0.20, 0.42, 0.26, 0.50),
+            sym("2", 0.265, 0.34, 0.30, 0.40), // sup on the s
+            sym("i", 0.31, 0.42, 0.34, 0.50),
+            sym("n", 0.35, 0.42, 0.41, 0.50),
+        ];
+        assert_eq!(latex(&syms), "s^{2}in");
+    }
+
+    /// Longest name first: `arcsin` must not merge as `arc` + `\sin` or leave `arc` loose.
+    #[test]
+    fn longer_function_names_win() {
+        let mut syms = Vec::new();
+        for (i, ch) in "arcsin".chars().enumerate() {
+            let x = 0.20 + i as f32 * 0.05;
+            syms.push(sym(&ch.to_string(), x, 0.42, x + 0.04, 0.50));
+        }
+        assert_eq!(latex(&syms), "\\arcsin");
+    }
+
+    /// Letters that spell nothing stay letters.
+    #[test]
+    fn non_words_stay_separate_letters() {
+        let syms = [
+            sym("a", 0.20, 0.42, 0.26, 0.50),
+            sym("b", 0.27, 0.42, 0.33, 0.50),
+            sym("y", 0.34, 0.42, 0.40, 0.50),
+        ];
+        assert_eq!(latex(&syms), "aby");
     }
 
     #[test]

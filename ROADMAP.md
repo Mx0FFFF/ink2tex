@@ -466,6 +466,32 @@ The gate asked for a number, not a vibe. This is the number, reproducibly:
 normalization documented in the harness and printed with every run; CROHME handled under
 its NC licence (evaluation only, never in the repo, never in training).
 
+### 2026-07-13: the function-name lexicon pass — right fix, wrong bottleneck
+
+`structure` now collapses adjacent script-less letters spelling a known function into one
+token (`s·i·n` → `\sin`, longest-first so `arcsin` wins, scripts on the final letter
+transfer — `sin^2`, `\log_2`; a mid-run script blocks the merge). Five unit tests; all
+real-capture guards byte-identical.
+
+**And the CROHME numbers did not move** (2016: identical; 2019: +1 exact). Measured on 120
+function-name expressions: the merge fired in **1%**, and only **31%** of predictions even
+contained the right letters anywhere — GT `\sin z=\beta` came back `s(^{*}n\partial^{=}\beta`,
+`2\cos\alpha` came back `\SigmaC\circs\alpha`, `n\log n` came back `n\aleph` (the whole
+word fused into one blob). The lexicon sits on top of a stack whose lower layers fail on
+CROHME's writer diversity.
+
+**Corrected cap ranking for the CROHME number**, by measurement not guess:
+1. **Letter recognition across writers** — our letters have 50–130 samples each, from one
+   browser corpus plus one person's pen. CROHME's `i`→`(`, `o`→`\circ`, `si`→`\psi`.
+   This is the x/+/1 lesson at corpus scale: diversity, not grammar. (And the permissive
+   sources are exhausted — growing this legally means growing the own corpus.)
+2. **Segmentation of connected/tight letter groups** (`log` → one blob).
+3. **Spurious script attachment** on jittery real-ink baselines (`s(^{*}n…`).
+4. *Then* grammar coverage — where the lexicon pass now already waits.
+
+The pass stays: it is correct, tested, and it serves separated pen-printing (this
+project's own writing style) — it was simply never going to rescue CROHME on its own.
+
 ### 🏆 2026-07-13: `2x + 3 = 7` → `2x+3=>` — the first full equation, end to end
 
 Drawn on the tablet, one line, real handwriting. **Five of six symbols top-1** (`2` 52%,
