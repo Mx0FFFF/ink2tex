@@ -687,6 +687,20 @@ Greedy segmentation (temporal + spatial) + left-to-right ordering. `2x + 3 = 7`,
 **Done when:** >85% exact-match on a 100-expression corpus you handwrote yourself.
 **Learning:** stroke grouping, the delayed-stroke problem, hypothesis scoring.
 
+> 📏 **First measurement, 2026-07-13 — the gate fails on v5, and now we know exactly why.**
+> The 100-expression guided session ran (96/100 mechanically clean; 4 truncated by the 2 s
+> pen-idle timeout). On the shipped v5 weights: **5/100 exact (gate: >85%)**, M4 median
+> **∞** (61 expressions have a symbol whose truth is outside its own top-5). The errors are
+> not noise — they are one writer's print letters landing on Detexify's symbol lookalikes,
+> utterly systematically: `n`→`\cap`, `c`→`\subset`, `y`→`x`, `z`→`Z`, `k`→`\varepsilon`,
+> `9`→`\varsigma`, `5`→`s`. Detexify is people drawing *symbols to search for*; algebra in
+> one person's hand is a different distribution, as DESIGN §5 predicted ("writer diversity
+> is a data property"). The counter-move is the flywheel at full scale: the session itself
+> is ~600 ground-truthed symbols; `--dump-groups` + `train/harvest_m2.py` align expression
+> truth down to symbol labels through the SAME pipeline that reads them (437 aligned from
+> the 80-expression training fold; misaligned expressions are refused, not mislabelled);
+> v7 trains on it with 20 expressions held out for an honest preview.
+
 ### ✅ M3 (gate) — Structure — **the heart of it**
 
 Line-of-sight graph → relation classification → maximum spanning tree → Symbol Layout Tree → LaTeX. Superscripts, subscripts, fractions, radicals, `\sum`/`\int` with limits.

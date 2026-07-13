@@ -25,10 +25,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default="train/collected/m2")
     ap.add_argument("--bin", default="target/release/ink2tex-desktop")
+    ap.add_argument("--model", default="train/expr.iwt")
+    ap.add_argument("--labels", default="train/expr.labels.txt")
+    ap.add_argument("--only", help="comma-separated stems: evaluate this subset only "
+                                   "(a held-out fold during retrain previews)")
     args = ap.parse_args()
 
     import json as _json
     pairs = sorted(f[:-4] for f in os.listdir(args.dir) if f.endswith(".ink"))
+    if args.only:
+        keep = set(args.only.split(","))
+        pairs = [p for p in pairs if p in keep]
     if not pairs:
         sys.exit(f"no corpus in {args.dir} — run collect_expressions.py first")
     exact, results, corrections = 0, [], []
@@ -36,7 +43,7 @@ def main():
         gt = open(os.path.join(args.dir, f"{stem}.gt.txt")).read().strip()
         r = subprocess.run(
             [args.bin, "--recognize-expr", os.path.join(args.dir, f"{stem}.ink"),
-             "--model", "train/expr.iwt", "--labels", "train/expr.labels.txt"],
+             "--model", args.model, "--labels", args.labels],
             capture_output=True, text=True, timeout=120)
         pred = next((l[7:] for l in r.stdout.splitlines() if l.startswith("LaTeX: ")), "")
         ok = normalize(pred) == normalize(gt)

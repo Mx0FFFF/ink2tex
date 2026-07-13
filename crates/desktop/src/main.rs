@@ -111,6 +111,14 @@ struct Cli {
     #[arg(long, value_name = "INK")]
     recognize_expr: Option<PathBuf>,
 
+    /// Dump the expression pipeline's symbol grouping as JSON: oriented per-symbol
+    /// strokes, in reading order, in the exact NDJSON stroke shape the flywheel logs
+    /// (`{"x":…,"y":…,"t":…}`). This is the ground-truth-alignment hook: zip these
+    /// groups with a prompted expression's tokens and every symbol of a collection
+    /// session becomes a labelled training sample. Needs --model and --labels.
+    #[arg(long, value_name = "INK")]
+    dump_groups: Option<PathBuf>,
+
     /// Interactive harness — needs a display. Not implemented at M0.
     #[arg(long)]
     harness: bool,
@@ -191,6 +199,63 @@ fn main() -> Result<()> {
                 None => println!("  {}. {:>5.1}%  class {}", i + 1, p.prob * 100.0, p.class),
             }
         }
+        return Ok(());
+    }
+
+    if let Some(ink_path) = cli.dump_groups {
+        let model_path = cli.model.context("--dump-groups needs --model <iwt>")?;
+        let labels_path = cli.labels.clone().context("--dump-groups needs --labels <txt>")?;
+        let bytes =
+            std::fs::read(&ink_path).with_context(|| format!("reading {}", ink_path.display()))?;
+        let ink = Ink::decode(&bytes)
+            .with_context(|| format!("parsing {} as .ink", ink_path.display()))?;
+        let blob = std::fs::read(&model_path)
+            .with_context(|| format!("reading {}", model_path.display()))?;
+        let weights = Weights::parse(&blob).context("parsing model .iwt")?;
+        let labels = Labels::from_lines(
+            &std::fs::read_to_string(&labels_path)
+                .with_context(|| format!("reading {}", labels_path.display()))?,
+        );
+        // Same counts auto-derivation as --recognize-expr: alignment must see the
+        // identical pipeline (orientation ballot included) that produced the readings.
+        let counts: Option<Vec<u32>> = std::fs::read_to_string(
+            labels_path
+                .to_string_lossy()
+                .replace(".labels.txt", ".counts.txt"),
+        )
+        .ok()
+        .map(|text| text.lines().filter_map(|l| l.trim().parse().ok()).collect());
+        let (oriented, symbols) =
+            ink2tex_core::analyze(&ink, &weights, &labels, counts.as_deref(), 1)
+                .context("expression analyzer")?;
+        let mut out = String::from("{\"groups\":[");
+        for (i, sym) in symbols.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push('[');
+            for (si, &idx) in sym.stroke_indices.iter().enumerate() {
+                if si > 0 {
+                    out.push(',');
+                }
+                out.push('[');
+                for (pi, p) in oriented.strokes[idx].points.iter().enumerate() {
+                    if pi > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&format!(
+                        r#"{{"x":{:.5},"y":{:.5},"t":{}}}"#,
+                        p.x,
+                        p.y,
+                        p.t_us / 1000
+                    ));
+                }
+                out.push(']');
+            }
+            out.push(']');
+        }
+        out.push_str("]}");
+        println!("{out}");
         return Ok(());
     }
 
