@@ -622,11 +622,17 @@ Greedy segmentation (temporal + spatial) + left-to-right ordering. `2x + 3 = 7`,
 **Done when:** >85% exact-match on a 100-expression corpus you handwrote yourself.
 **Learning:** stroke grouping, the delayed-stroke problem, hypothesis scoring.
 
-### ⬜ M3 — Structure *(6–12 weeks)* — **the heart of it**
+### ✅ M3 (gate) — Structure — **the heart of it**
 
 Line-of-sight graph → relation classification → maximum spanning tree → Symbol Layout Tree → LaTeX. Superscripts, subscripts, fractions, radicals, `\sum`/`\int` with limits.
 
 **Done when:** you can report an honest exact-match number on CROHME 2014 (**evaluation only** — do not train on it).
+
+> ✅ **Gate met 2026-07-13.** The TC11 archive carves out no separate 2014 set; reported on
+> the two full competition test sets it does carry: **2016: 2.3% exact / 46.6% symbol-F1
+> (n=1147)** · **2019: 3.7% / 46.9% (n=1199)** — same binary the device ships, harness +
+> normalization committed. The *heart* items (LOS graph → relations → MST, the §4.2
+> lattice) remain the roadmap for RAISING the number; the gate asked for honesty, not size.
 
 ⚠️ **Accuracy will feel bad here and that is expected.** Full-expression exact-match is well under 100% even for GPU transformers. If you benchmark against Mathpix you will conclude you failed and quit. **Read DESIGN.md §7 before you do that.** The correction UI is the product; the model just makes it fast.
 
