@@ -488,6 +488,13 @@ corpus is now v7's training data and may never grade it. What one session bought
 0→20%, median ∞→1, and a correction UI that crossed from demo to usable (14/20
 expressions fixable in ≤2 taps).
 
+**Addendum, same day — the protrusion rule** (scripts must protrude past a normal-aspect
+base's edge; ∫-style tall-thin operators exempt; see the commit) lifted the held-out fold
+to **6/20 exact (30%)** and cut the full corpus's not-tap-fixable from 61 (v5) to **24**,
+at a disclosed cost of −0.7/−0.3 CROHME F1. Full-corpus exact with v7+rule: 29% — nearly
+identical to the unseen fold's 30%, i.e. 940 own-hand samples in a 215k corpus barely
+memorize; the number is real capability.
+
 The residual failure list is legible, in impact order: (1) **script false-positives** —
 `6_{z}+8=8` and `b_{=}5k+3` have every SYMBOL right at 0–1 taps and lose only to the
 sub/superscript geometry on this hand's size variance; (2) the four **truncated
