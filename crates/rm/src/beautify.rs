@@ -38,6 +38,11 @@ use crate::STOP;
 const HOLD_EPS: f32 = 0.008;
 /// … for at least this long.
 const HOLD_MS: u64 = 1200;
+/// Ink written this long before the current burst is STALE and expires: it is
+/// someone's earlier notes, not part of the formula being snapped. Without this
+/// the daemon once vacuumed a day of stray marks into one capture and erased
+/// the user's own notes to "beautify" them.
+const STALE_S: u64 = 60;
 
 pub struct Beautifier {
     weights: Weights<'static>,
@@ -66,6 +71,9 @@ impl Beautifier {
         let dig = evdev::find_digitizer().context("locating the pen digitizer")?;
         let mut inj = Injector::open(&dig).context("opening digitizer for write")?;
         eprintln!("beautifier ready: write a formula, then HOLD the pen still to snap it");
+        eprintln!("  ⚠ select a PEN in xochitl's toolbar (fineliner recommended) — with the");
+        eprintln!("    eraser tool selected, everything we \"write\" erases instead: the tip's");
+        eprintln!("    meaning belongs to the toolbar, and we live below it (docs/device.md)");
         while !STOP.load(Ordering::SeqCst) {
             let Some(ink) = capture_until_hold(&dig)? else {
                 continue; // spurious hold with no writing before it
@@ -190,6 +198,7 @@ fn capture_until_hold(dig: &Digitizer) -> Result<Option<Ink>> {
         crate::capture::Capture::from_axes(dig.x, dig.y, dig.pressure, dig.tilt_x, dig.tilt_y);
     let mut buf = [InputEvent::zeroed(); 64];
     let mut anchor: Option<((f32, f32), Instant)> = None;
+    let mut last_ink: Option<Instant> = None;
 
     loop {
         if STOP.load(Ordering::SeqCst) {
@@ -217,6 +226,19 @@ fn capture_until_hold(dig: &Digitizer) -> Result<Option<Ink>> {
             };
             for ev in &buf[..n] {
                 if let Some(seg) = cap.process(ev) {
+                    // Fresh ink after a long quiet spell: everything captured
+                    // before the pause is stale — expire it. (The in-flight
+                    // stroke and tool state stay latched inside Capture.)
+                    let now = Instant::now();
+                    if let Some(t) = last_ink {
+                        if now.duration_since(t) > Duration::from_secs(STALE_S) {
+                            let stale = cap.take_completed();
+                            if !stale.is_empty() {
+                                eprintln!("expired {} stale strokes", stale.len());
+                            }
+                        }
+                    }
+                    last_ink = Some(now);
                     // A latched ink point. Movement resets the hold anchor;
                     // stillness lets it age toward the trigger.
                     let p = seg.to;

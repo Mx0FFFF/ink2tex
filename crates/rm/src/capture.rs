@@ -166,6 +166,15 @@ impl Capture {
         self.tip_down
     }
 
+    /// Steal the strokes completed so far, leaving any in-flight stroke (and all
+    /// latched tool state) untouched. The beautifier uses this to expire STALE
+    /// ink: strokes written long before the current burst must not be dragged
+    /// into a formula — the first overnight daemon vacuumed a day of stray
+    /// marks into one capture, recognized garbage, and erased the user's notes.
+    pub fn take_completed(&mut self) -> Vec<ink2tex_core::Stroke> {
+        std::mem::take(&mut self.ink.strokes)
+    }
+
     fn end_stroke(&mut self) {
         if !self.stroke.is_empty() {
             self.ink.push(std::mem::take(&mut self.stroke));
