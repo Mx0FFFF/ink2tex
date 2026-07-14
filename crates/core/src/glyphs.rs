@@ -150,7 +150,34 @@ fn composed(cmd: &str) -> Option<RawGlyph> {
 /// what `latex::symbol_command` produces: a literal ASCII char ("x", "2", "+"),
 /// or a LaTeX command ("\\pm"). Multi-char ASCII runs (function names like
 /// "sin") are the caller's job to split.
+///
+/// Two finishing passes make the output read as TYPESET math instead of plotter
+/// output:
+///  - **Chaikin smoothing** (two rounds of corner cutting): Hershey glyphs are
+///    sparse polylines, and at pen scale their curves render as visible facets —
+///    the `2`'s bowl was an obvious hexagon on the panel;
+///  - **italic slant for letters**: mathematics sets variables in italic; a
+///    12° shear about the baseline is most of that look for a stroke font.
 pub fn strokes(cmd: &str) -> Option<Glyph> {
+    let mut g = raw_strokes(cmd)?;
+    for pl in &mut g.polylines {
+        *pl = chaikin(pl, 2);
+    }
+    if cmd.len() == 1 && cmd.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+        const SLANT: f32 = 0.21; // tan(12°)
+        for pl in &mut g.polylines {
+            for p in pl.iter_mut() {
+                p.0 += (800.0 - p.1) * SLANT;
+            }
+        }
+        // The shear widens the occupied box a little; advance follows suit so
+        // a slanted letter does not lean into its neighbour.
+        g.advance += 800.0 * SLANT * 0.35;
+    }
+    Some(g)
+}
+
+fn raw_strokes(cmd: &str) -> Option<Glyph> {
     if let Some((l, r, pls)) = composed(cmd) {
         return Some(to_em(l, r, &pls));
     }
@@ -162,6 +189,29 @@ pub fn strokes(cmd: &str) -> Option<Glyph> {
     let table = parsed_futural();
     let (l, r, pls) = table.get(c as usize - ' ' as usize)?;
     Some(to_em(*l, *r, pls))
+}
+
+/// Chaikin's corner-cutting: each round replaces every interior corner with two
+/// points at 1/4 and 3/4 of its adjoining segments. Endpoints are preserved, so
+/// glyphs keep their exact extents; straight two-point lines pass through
+/// untouched (nothing to cut).
+fn chaikin(pl: &[(f32, f32)], rounds: usize) -> Vec<(f32, f32)> {
+    let mut cur: Vec<(f32, f32)> = pl.to_vec();
+    for _ in 0..rounds {
+        if cur.len() < 3 {
+            return cur;
+        }
+        let mut next = Vec::with_capacity(cur.len() * 2);
+        next.push(cur[0]);
+        for w in cur.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            next.push((a.0 * 0.75 + b.0 * 0.25, a.1 * 0.75 + b.1 * 0.25));
+            next.push((a.0 * 0.25 + b.0 * 0.75, a.1 * 0.25 + b.1 * 0.75));
+        }
+        next.push(*cur.last().expect("nonempty"));
+        cur = next;
+    }
+    cur
 }
 
 /// The parse is cheap (~3.5 KB of text) but not free; do it once.

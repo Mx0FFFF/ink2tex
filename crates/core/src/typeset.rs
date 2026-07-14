@@ -125,21 +125,41 @@ fn shift(items: &[Item], dx: i32, dy: i32) -> Vec<Item> {
         .collect()
 }
 
-/// Lay out a horizontal run: boxes sit on a shared baseline.
-fn hbox(boxes: Vec<LBox>, gap: i32) -> LBox {
+/// Lay out a horizontal run: boxes sit on a shared baseline, with a possibly
+/// different gap at every boundary (`gaps.len() == boxes.len() - 1`; missing
+/// entries fall back to the last, or 0).
+fn hbox_gaps(boxes: Vec<LBox>, gaps: &[i32]) -> LBox {
     let baseline = boxes.iter().map(|b| b.baseline).max().unwrap_or(0);
     let depth = boxes.iter().map(|b| b.h - b.baseline).max().unwrap_or(0);
     let mut items = Vec::new();
     let mut x = 0;
-    for b in &boxes {
+    for (i, b) in boxes.iter().enumerate() {
         items.extend(shift(&b.items, x, baseline - b.baseline));
-        x += b.w + gap;
+        x += b.w
+            + if i + 1 < boxes.len() {
+                gaps.get(i).or(gaps.last()).copied().unwrap_or(0)
+            } else {
+                0
+            };
     }
     LBox {
-        w: (x - gap).max(0),
+        w: x.max(0),
         h: baseline + depth,
         baseline,
         items,
+    }
+}
+
+/// TeX's insight, reduced to one function: how much air a token gets depends on
+/// its grammatical class. Relations (=, <) breathe widest, binary operators
+/// (+, −, ±) get a medium cushion, everything else sits close. Uniform spacing
+/// is exactly what makes machine output look non-typeset.
+fn spacing_class(t: &Term) -> i32 {
+    let Base::Symbol(l) = &t.base else { return 0 };
+    match display(l).as_str() {
+        "=" | "<" | ">" | "\\leq" | "\\geq" | "\\neq" => 150,
+        "+" | "-" | "\\pm" | "\\times" | "\\cdot" | "\\div" => 70,
+        _ => 0,
     }
 }
 
@@ -148,7 +168,13 @@ fn layout_slt(slt: &Slt, size: i32) -> LBox {
     if boxes.is_empty() {
         return text_box(" ", size);
     }
-    hbox(boxes, scale(120, size))
+    // Per-boundary gaps: base air plus each neighbour's class cushion.
+    let gaps: Vec<i32> = slt
+        .terms
+        .windows(2)
+        .map(|w| scale(90 + spacing_class(&w[0]) + spacing_class(&w[1]), size))
+        .collect();
+    hbox_gaps(boxes, &gaps)
 }
 
 fn layout_term(t: &Term, size: i32) -> LBox {
